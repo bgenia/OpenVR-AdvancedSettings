@@ -1,11 +1,24 @@
 asyncapi: 3.0.0
 info:
   title: OpenVR Advanced Settings IPC
-  version: 1.0.0
+  version: 1.1.0
   description: |
     Local IPC for reading and writing OpenVR Advanced Settings (OVRAS) state
     from other programs. Version 1 exposes the playspace offset (the values
     produced by Space Drag / Space Turn and shown in the Offsets tab).
+
+    **Offset stacks (1.1, feature "stacks").** Software that moves the user
+    (leashes, grab/throw tools) should not write the user's own offset, or it
+    fights the user's Space Drag. Instead it writes a named *stack*
+    (`"stack": "myTool"`). The playspace is placed at
+
+        total = user offset + Σ stacks
+
+    where translations and yaws are summed (order does not matter). The user's
+    Reset Offsets only clears the user offset; stacks are cleared by a `reset`
+    request, the OVRAS UI, OVRAS's out-of-bounds safety reset, or — for
+    non-persistent stacks — when the connection that last wrote them closes.
+    At most 32 stacks exist at once. Axis locks only limit the user offset.
 
     * Transport: a single WebSocket connection; every frame is a UTF-8 JSON text frame.
     * Addresses are OSC-style paths (`/space/offset/x`) so an OSC transport can
@@ -46,7 +59,9 @@ channels:
       addRequest: { $ref: '#/components/messages/addRequest' }
       subscribeRequest: { $ref: '#/components/messages/subscribeRequest' }
       unsubscribeRequest: { $ref: '#/components/messages/unsubscribeRequest' }
+      resetRequest: { $ref: '#/components/messages/resetRequest' }
       offsetResponse: { $ref: '#/components/messages/offsetResponse' }
+      stackListResponse: { $ref: '#/components/messages/stackListResponse' }
       numberResponse: { $ref: '#/components/messages/numberResponse' }
       nullResponse: { $ref: '#/components/messages/nullResponse' }
       errorResponse: { $ref: '#/components/messages/errorResponse' }
@@ -68,7 +83,10 @@ operations:
   getOffset:
     action: receive
     channel: { $ref: '#/channels/root' }
-    summary: Read the whole offset (`/space/offset`) or one field (`/space/offset/x`).
+    summary: |
+      Read the user offset or a stack (`/space/offset[/field]`, optional `stack`; a missing
+      stack reads as zero), the applied total (`/space/total[/field]`), or the stack list
+      (`/space/stacks`).
     messages:
       - $ref: '#/channels/root/messages/getRequest'
     reply:
@@ -76,12 +94,16 @@ operations:
       messages:
         - $ref: '#/channels/root/messages/offsetResponse'
         - $ref: '#/channels/root/messages/numberResponse'
+        - $ref: '#/channels/root/messages/stackListResponse'
         - $ref: '#/channels/root/messages/errorResponse'
 
   setOffset:
     action: receive
     channel: { $ref: '#/channels/root' }
-    summary: Set offsets to absolute values. Replies with the full resulting offset.
+    summary: |
+      Set offsets to absolute values: the user's, or a stack's when `stack` is given (created on
+      first write; `stack_limit` if 32 already exist). Replies with the full resulting offset of
+      the target.
     messages:
       - $ref: '#/channels/root/messages/setRequest'
     reply:
@@ -93,7 +115,7 @@ operations:
   addOffset:
     action: receive
     channel: { $ref: '#/channels/root' }
-    summary: Add relative deltas to the current offsets. Replies with the full resulting offset.
+    summary: Like setOffset, but adds relative deltas. Replies with the full resulting offset of the target.
     messages:
       - $ref: '#/channels/root/messages/addRequest'
     reply:
@@ -102,16 +124,32 @@ operations:
         - $ref: '#/channels/root/messages/offsetResponse'
         - $ref: '#/channels/root/messages/errorResponse'
 
+  reset:
+    action: receive
+    channel: { $ref: '#/channels/root' }
+    summary: |
+      With `stack`, remove that stack. Without, zero the user offset (stacks are kept).
+    messages:
+      - $ref: '#/channels/root/messages/resetRequest'
+    reply:
+      channel: { $ref: '#/channels/root' }
+      messages:
+        - $ref: '#/channels/root/messages/nullResponse'
+        - $ref: '#/channels/root/messages/errorResponse'
+
   subscribe:
     action: receive
     channel: { $ref: '#/channels/root' }
-    summary: Start receiving `offsetChanged` events. Replies with the current offset as a snapshot.
+    summary: |
+      Start receiving `offsetChanged` events for `/space/offset` (user), `/space/total` or
+      `/space/stacks`. Replies with the current value as a snapshot.
     messages:
       - $ref: '#/channels/root/messages/subscribeRequest'
     reply:
       channel: { $ref: '#/channels/root' }
       messages:
         - $ref: '#/channels/root/messages/offsetResponse'
+        - $ref: '#/channels/root/messages/stackListResponse'
         - $ref: '#/channels/root/messages/errorResponse'
 
   unsubscribe:
@@ -130,8 +168,8 @@ operations:
     action: send
     channel: { $ref: '#/channels/root' }
     summary: |
-      Pushed to subscribers when the offset changes from any source (UI, Space Drag,
-      Space Turn, profiles, other IPC clients). Coalesced to at most one event per
+      Pushed to subscribers when a subscribed path changes from any source (UI, Space Drag,
+      Space Turn, profiles, other IPC clients). Coalesced to at most one event per path per
       ~16 ms window, carrying the latest full state.
     messages:
       - $ref: '#/channels/root/messages/offsetChanged'
@@ -154,7 +192,7 @@ components:
       correlationId: { $ref: '#/components/correlationIds/requestId' }
       payload: { $ref: './schemas/response.schema.json#/definitions/helloResponse' }
       examples:
-        - payload: { id: 1, ok: true, value: { name: OVRAS, protocol: 1, version: '5.8.11' } }
+        - payload: { id: 1, ok: true, value: { name: OVRAS, protocol: 1, version: '5.8.11', features: [stacks] } }
     getRequest:
       name: getRequest
       correlationId: { $ref: '#/components/correlationIds/requestId' }
@@ -162,6 +200,9 @@ components:
       examples:
         - payload: { id: 2, op: get, path: /space/offset }
         - payload: { id: 3, op: get, path: /space/offset/rotation }
+        - payload: { id: 10, op: get, path: /space/offset, stack: vrcleash }
+        - payload: { id: 11, op: get, path: /space/total }
+        - payload: { id: 12, op: get, path: /space/stacks }
     setRequest:
       name: setRequest
       correlationId: { $ref: '#/components/correlationIds/requestId' }
@@ -169,18 +210,29 @@ components:
       examples:
         - payload: { id: 4, op: set, path: /space/offset, value: { x: 0.5, rotation: 90 } }
         - payload: { id: 5, op: set, path: /space/offset/y, value: 0 }
+        - payload: { id: 13, op: set, path: /space/offset/y, value: 1, stack: vrcleash }
+        - payload: { id: 14, op: set, path: /space/offset, value: { rotation: 45 }, stack: grab, persist: true, pivot: origin }
     addRequest:
       name: addRequest
       correlationId: { $ref: '#/components/correlationIds/requestId' }
       payload: { $ref: './schemas/request.schema.json#/definitions/addRequest' }
       examples:
         - payload: { id: 6, op: add, path: /space/offset, value: { y: 0.1 } }
+        - payload: { id: 15, op: add, path: /space/offset, value: { x: 0.01, z: -0.02 }, stack: vrcleash }
+    resetRequest:
+      name: resetRequest
+      correlationId: { $ref: '#/components/correlationIds/requestId' }
+      payload: { $ref: './schemas/request.schema.json#/definitions/resetRequest' }
+      examples:
+        - payload: { id: 16, op: reset, path: /space/offset, stack: vrcleash }
+        - payload: { id: 17, op: reset, path: /space/offset }
     subscribeRequest:
       name: subscribeRequest
       correlationId: { $ref: '#/components/correlationIds/requestId' }
       payload: { $ref: './schemas/request.schema.json#/definitions/subscribeRequest' }
       examples:
         - payload: { id: 7, op: subscribe, path: /space/offset }
+        - payload: { id: 18, op: subscribe, path: /space/stacks }
     unsubscribeRequest:
       name: unsubscribeRequest
       correlationId: { $ref: '#/components/correlationIds/requestId' }
@@ -193,6 +245,18 @@ components:
       payload: { $ref: './schemas/response.schema.json#/definitions/offsetResponse' }
       examples:
         - payload: { id: 2, ok: true, value: { x: 0.5, y: 0.1, z: 0, rotation: 90 } }
+    stackListResponse:
+      name: stackListResponse
+      correlationId: { $ref: '#/components/correlationIds/requestId' }
+      payload: { $ref: './schemas/response.schema.json#/definitions/stackListResponse' }
+      examples:
+        - payload:
+            id: 12
+            ok: true
+            value:
+              max: 32
+              stacks:
+                - { id: vrcleash, persist: false, offset: { x: 0.01, y: 1, z: -0.02, rotation: 0 } }
     numberResponse:
       name: numberResponse
       correlationId: { $ref: '#/components/correlationIds/requestId' }
@@ -211,8 +275,14 @@ components:
       payload: { $ref: './schemas/response.schema.json#/definitions/errorResponse' }
       examples:
         - payload: { id: 9, ok: false, error: { code: bad_path, message: 'unknown path: /space/nope' } }
+        - payload: { id: 19, ok: false, error: { code: stack_limit, message: 'at most 32 offset stacks' } }
     offsetChanged:
       name: offsetChanged
       payload: { $ref: './schemas/event.schema.json' }
       examples:
         - payload: { event: changed, path: /space/offset, value: { x: 0.52, y: 0.1, z: 0, rotation: 90 } }
+        - payload: { event: changed, path: /space/total, value: { x: 0.53, y: 1.1, z: -0.02, rotation: 90 } }
+        - payload:
+            event: changed
+            path: /space/stacks
+            value: { max: 32, stacks: [ { id: vrcleash, persist: false, offset: { x: 0.01, y: 1, z: -0.02, rotation: 0 } } ] }

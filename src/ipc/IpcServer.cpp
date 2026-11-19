@@ -6,6 +6,8 @@
 #include <QtWebSockets/QWebSocketCorsAuthenticator>
 #include <easylogging++.h>
 
+#include "../tabcontrollers/MoveCenterTabController.h"
+
 namespace advsettings
 {
 namespace
@@ -19,7 +21,8 @@ namespace
 IpcServer::IpcServer( MoveCenterTabController& moveCenter,
                       const QString& appVersion,
                       QObject* parent )
-    : QObject( parent ), m_protocol( moveCenter, appVersion ),
+    : QObject( parent ), m_moveCenter( moveCenter ),
+      m_protocol( moveCenter, appVersion ),
       m_server( "OVRAS IPC", QWebSocketServer::NonSecureMode )
 {
     connect( &m_server,
@@ -70,6 +73,9 @@ void IpcServer::stop()
     m_clients.clear();
     for ( auto* client : clients )
     {
+        // Non-persistent stacks belong to their connection.
+        m_moveCenter.removeOffsetStacksOwnedBy(
+            reinterpret_cast<quintptr>( client ) );
         client->disconnect( this );
         client->close( QWebSocketProtocol::CloseCodeGoingAway,
                        "server stopping" );
@@ -150,29 +156,58 @@ void IpcServer::onTextMessage( const QString& message )
         return;
     }
 
-    const auto result = m_protocol.handleMessage( message );
+    const auto result = m_protocol.handleMessage(
+        message, reinterpret_cast<quintptr>( client ) );
     sendJson( client, result.reply );
 
     switch ( result.subscription )
     {
     case IpcProtocol::SubscriptionChange::Subscribe:
         // The reply already carried this snapshot.
-        m_subscribers.insert( client, result.reply.value( "value" ).toObject() );
+        m_subscribers[client].insert( result.subscriptionPath,
+                                      result.reply.value( "value" ) );
         if ( !m_pushTimer.isActive() )
         {
             m_pushTimer.start();
         }
         break;
     case IpcProtocol::SubscriptionChange::Unsubscribe:
-        m_subscribers.remove( client );
-        if ( m_subscribers.isEmpty() )
-        {
-            m_pushTimer.stop();
-        }
+        removeSubscriber( client, result.subscriptionPath );
         break;
     case IpcProtocol::SubscriptionChange::None:
         break;
     }
+}
+
+void IpcServer::removeSubscriber( QWebSocket* client, const QString& path )
+{
+    auto it = m_subscribers.find( client );
+    if ( it == m_subscribers.end() )
+    {
+        return;
+    }
+    it->remove( path );
+    if ( it->isEmpty() )
+    {
+        m_subscribers.erase( it );
+    }
+    if ( m_subscribers.isEmpty() )
+    {
+        m_pushTimer.stop();
+    }
+}
+
+void IpcServer::forgetClient( QWebSocket* client )
+{
+    m_clients.removeAll( client );
+    m_subscribers.remove( client );
+    if ( m_subscribers.isEmpty() )
+    {
+        m_pushTimer.stop();
+    }
+    // Non-persistent stacks belong to their connection.
+    m_moveCenter.removeOffsetStacksOwnedBy(
+        reinterpret_cast<quintptr>( client ) );
 }
 
 void IpcServer::onBinaryMessage( const QByteArray& /*message*/ )
@@ -196,25 +231,32 @@ void IpcServer::onDisconnected()
     {
         return;
     }
-    m_clients.removeAll( client );
-    m_subscribers.remove( client );
-    if ( m_subscribers.isEmpty() )
-    {
-        m_pushTimer.stop();
-    }
+    forgetClient( client );
     LOG( INFO ) << "IPC: client disconnected";
     client->deleteLater();
 }
 
 void IpcServer::onPushTick()
 {
-    const auto current = m_protocol.currentOffset();
-    for ( auto it = m_subscribers.begin(); it != m_subscribers.end(); ++it )
+    // Compute each subscribed path once per tick.
+    QHash<QString, QJsonValue> current;
+    for ( auto client = m_subscribers.begin(); client != m_subscribers.end();
+          ++client )
     {
-        if ( it.value() != current )
+        for ( auto sub = client->begin(); sub != client->end(); ++sub )
         {
-            sendJson( it.key(), IpcProtocol::changedEvent( current ) );
-            it.value() = current;
+            auto value = current.find( sub.key() );
+            if ( value == current.end() )
+            {
+                value = current.insert( sub.key(),
+                                        m_protocol.snapshot( sub.key() ) );
+            }
+            if ( sub.value() != *value )
+            {
+                sendJson( client.key(),
+                          IpcProtocol::changedEvent( sub.key(), *value ) );
+                sub.value() = *value;
+            }
         }
     }
 }

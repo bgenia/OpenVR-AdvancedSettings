@@ -8,6 +8,7 @@
     { "$ref": "#/definitions/getRequest" },
     { "$ref": "#/definitions/setRequest" },
     { "$ref": "#/definitions/addRequest" },
+    { "$ref": "#/definitions/resetRequest" },
     { "$ref": "#/definitions/subscribeRequest" },
     { "$ref": "#/definitions/unsubscribeRequest" }
   ],
@@ -15,6 +16,9 @@
     "id": {
       "type": "integer",
       "description": "Optional client-chosen correlation id, echoed in the reply."
+    },
+    "stack": {
+      "$ref": "offset.schema.json#/definitions/stackId"
     },
     "helloRequest": {
       "type": "object",
@@ -26,49 +30,85 @@
       "additionalProperties": false
     },
     "getRequest": {
-      "type": "object",
-      "properties": {
-        "id": { "$ref": "#/definitions/id" },
-        "op": { "const": "get" },
-        "path": {
-          "anyOf": [
-            { "$ref": "offset.schema.json#/definitions/offsetPath" },
-            { "$ref": "offset.schema.json#/definitions/offsetFieldPath" }
-          ]
-        }
-      },
-      "required": ["op", "path"],
-      "additionalProperties": false
-    },
-    "writeRequest": {
-      "description": "Shared shape of set/add. Whole-object path takes a partial offset; field path takes a number.",
+      "description": "Read the user offset or a stack (/space/offset[/field] + optional stack), the total, or the stack list.",
       "oneOf": [
         {
           "type": "object",
           "properties": {
             "id": { "$ref": "#/definitions/id" },
-            "op": { "type": "string" },
-            "path": { "$ref": "offset.schema.json#/definitions/offsetPath" },
-            "value": { "$ref": "offset.schema.json#/definitions/partialOffset" }
+            "op": { "const": "get" },
+            "path": {
+              "anyOf": [
+                { "$ref": "offset.schema.json#/definitions/offsetPath" },
+                { "$ref": "offset.schema.json#/definitions/offsetFieldPath" }
+              ]
+            },
+            "stack": { "$ref": "#/definitions/stack" }
           },
-          "required": ["op", "path", "value"],
+          "required": ["op", "path"],
           "additionalProperties": false
         },
         {
           "type": "object",
           "properties": {
             "id": { "$ref": "#/definitions/id" },
-            "op": { "type": "string" },
-            "path": { "$ref": "offset.schema.json#/definitions/offsetFieldPath" },
-            "value": {
-              "type": "number",
-              "minimum": -1000000,
-              "maximum": 1000000,
-              "description": "Meters for x/y/z (limited to ±10000), degrees for rotation (±1000000)."
+            "op": { "const": "get" },
+            "path": {
+              "anyOf": [
+                { "$ref": "offset.schema.json#/definitions/totalPath" },
+                { "$ref": "offset.schema.json#/definitions/totalFieldPath" },
+                { "$ref": "offset.schema.json#/definitions/stacksPath" }
+              ]
             }
           },
-          "required": ["op", "path", "value"],
+          "required": ["op", "path"],
           "additionalProperties": false
+        }
+      ]
+    },
+    "writeCommon": {
+      "description": "Optional fields shared by set/add. `persist` is only allowed together with `stack`; when omitted, an existing stack keeps its setting and a new one is non-persistent.",
+      "properties": {
+        "id": { "$ref": "#/definitions/id" },
+        "op": { "type": "string" },
+        "stack": { "$ref": "#/definitions/stack" },
+        "persist": { "type": "boolean" },
+        "pivot": { "$ref": "offset.schema.json#/definitions/pivot" }
+      },
+      "dependencies": { "persist": ["stack"] }
+    },
+    "writeRequest": {
+      "description": "Shared shape of set/add. Whole-object path takes a partial offset; field path takes a number. With `stack` the write targets that stack (created on first write), otherwise the user's offset.",
+      "allOf": [
+        { "$ref": "#/definitions/writeCommon" },
+        {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "id": true, "op": true, "stack": true, "persist": true, "pivot": true,
+                "path": { "$ref": "offset.schema.json#/definitions/offsetPath" },
+                "value": { "$ref": "offset.schema.json#/definitions/partialOffset" }
+              },
+              "required": ["op", "path", "value"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "id": true, "op": true, "stack": true, "persist": true, "pivot": true,
+                "path": { "$ref": "offset.schema.json#/definitions/offsetFieldPath" },
+                "value": {
+                  "type": "number",
+                  "minimum": -1000000,
+                  "maximum": 1000000,
+                  "description": "Meters for x/y/z (limited to ±10000), degrees for rotation (±1000000)."
+                }
+              },
+              "required": ["op", "path", "value"],
+              "additionalProperties": false
+            }
+          ]
         }
       ]
     },
@@ -86,12 +126,31 @@
         { "properties": { "op": { "const": "add" } } }
       ]
     },
+    "resetRequest": {
+      "description": "With `stack`: remove that stack (its contribution drops to zero; resetting a missing stack is not an error). Without `stack`: zero the user's offset, like the Reset Offsets button; stacks are kept.",
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/definitions/id" },
+        "op": { "const": "reset" },
+        "path": { "$ref": "offset.schema.json#/definitions/offsetPath" },
+        "stack": { "$ref": "#/definitions/stack" }
+      },
+      "required": ["op", "path"],
+      "additionalProperties": false
+    },
+    "subscribablePath": {
+      "anyOf": [
+        { "$ref": "offset.schema.json#/definitions/offsetPath" },
+        { "$ref": "offset.schema.json#/definitions/totalPath" },
+        { "$ref": "offset.schema.json#/definitions/stacksPath" }
+      ]
+    },
     "subscribeRequest": {
       "type": "object",
       "properties": {
         "id": { "$ref": "#/definitions/id" },
         "op": { "const": "subscribe" },
-        "path": { "$ref": "offset.schema.json#/definitions/offsetPath" }
+        "path": { "$ref": "#/definitions/subscribablePath" }
       },
       "required": ["op", "path"],
       "additionalProperties": false
@@ -101,7 +160,7 @@
       "properties": {
         "id": { "$ref": "#/definitions/id" },
         "op": { "const": "unsubscribe" },
-        "path": { "$ref": "offset.schema.json#/definitions/offsetPath" }
+        "path": { "$ref": "#/definitions/subscribablePath" }
       },
       "required": ["op", "path"],
       "additionalProperties": false

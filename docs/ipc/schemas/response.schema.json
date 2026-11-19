@@ -15,7 +15,7 @@
         "id": { "$ref": "#/definitions/id" },
         "ok": { "const": true },
         "value": {
-          "description": "hello → helloValue; get on /space/offset, set, add, subscribe → offset; get on a field path → number; unsubscribe → null."
+          "description": "hello → helloValue; get/subscribe on /space/offset or /space/total, set, add → offset (of the targeted stack when `stack` was given); get on a field path → number; get/subscribe on /space/stacks → stackList; reset, unsubscribe → null."
         }
       },
       "required": ["ok", "value"],
@@ -26,9 +26,14 @@
       "properties": {
         "name": { "const": "OVRAS" },
         "protocol": { "const": 1 },
-        "version": { "type": "string", "description": "OVRAS application version string." }
+        "version": { "type": "string", "description": "OVRAS application version string." },
+        "features": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional protocol features this server supports. \"stacks\": offset stacks (stack/persist/pivot fields, reset, /space/total, /space/stacks)."
+        }
       },
-      "required": ["name", "protocol", "version"],
+      "required": ["name", "protocol", "version", "features"],
       "additionalProperties": false
     },
     "helloResponse": {
@@ -49,6 +54,12 @@
         { "properties": { "value": { "type": "number" } } }
       ]
     },
+    "stackListResponse": {
+      "allOf": [
+        { "$ref": "#/definitions/okResponse" },
+        { "properties": { "value": { "$ref": "offset.schema.json#/definitions/stackList" } } }
+      ]
+    },
     "nullResponse": {
       "allOf": [
         { "$ref": "#/definitions/okResponse" },
@@ -57,8 +68,8 @@
     },
     "errorCode": {
       "type": "string",
-      "enum": ["bad_json", "bad_op", "bad_path", "bad_value", "internal"],
-      "description": "bad_json: not a JSON object. bad_op: missing/unknown op. bad_path: missing/unknown path for this op. bad_value: value missing, wrong type, non-finite, or has unknown fields. internal: server-side failure."
+      "enum": ["bad_json", "bad_op", "bad_path", "bad_value", "stack_limit", "internal"],
+      "description": "bad_json: not a JSON object. bad_op: missing/unknown op. bad_path: missing/unknown path for this op. bad_value: value missing, wrong type, non-finite, invalid stack id, or has unknown fields. stack_limit: the write would create a stack beyond the maximum. internal: server-side failure."
     },
     "errorResponse": {
       "type": "object",

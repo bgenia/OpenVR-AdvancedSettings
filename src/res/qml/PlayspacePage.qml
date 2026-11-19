@@ -466,7 +466,24 @@ MyStackViewPage {
                     Layout.preferredWidth: 250
                     text: "Reset"
                     onClicked: {
-                        MoveCenterTabController.reset()
+                        MoveCenterTabController.userReset()
+                    }
+                }
+
+                MyPushButton {
+                    id: offsetStacksButton
+                    Layout.preferredWidth: 330
+                    property int stackCount: MoveCenterTabController.offsetStackList().length
+                    text: "Offset Stacks (" + stackCount + ")"
+                    onClicked: {
+                        MyResources.playFocusChangedSound()
+                        mainView.push(offsetStacksPage)
+                    }
+                    Connections {
+                        target: MoveCenterTabController
+                        onOffsetStacksChanged: {
+                            offsetStacksButton.stackCount = MoveCenterTabController.offsetStackList().length
+                        }
                     }
                 }
 

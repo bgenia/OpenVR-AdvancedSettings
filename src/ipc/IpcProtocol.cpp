@@ -1,9 +1,10 @@
 #include "IpcProtocol.h"
 
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonParseError>
+#include <QRegularExpression>
 #include <QStringList>
-#include <QtGlobal>
 #include <cmath>
 #include <utility>
 
@@ -14,14 +15,32 @@ namespace advsettings
 namespace
 {
     constexpr auto k_offsetPath = "/space/offset";
-    constexpr auto k_fieldPathPrefix = "/space/offset/";
+    constexpr auto k_totalPath = "/space/total";
+    constexpr auto k_stacksPath = "/space/stacks";
 
-    // Input limits (see partialOffset in docs/ipc/schemas/offset.schema.json).
+    // Input limits (see metersInput/degreesInput in
+    // docs/ipc/schemas/offset.schema.json).
     constexpr double k_maxMeters = 10000.0;
     constexpr double k_maxDegrees = 1000000.0;
 
     // Largest integer exactly representable in a double (2^53).
     constexpr double k_maxSafeInteger = 9007199254740992.0;
+
+    enum class PathKind
+    {
+        Unknown,
+        Offset,
+        OffsetField,
+        Total,
+        TotalField,
+        Stacks,
+    };
+
+    struct ParsedPath
+    {
+        PathKind kind = PathKind::Unknown;
+        QString field; // for *Field kinds
+    };
 
     const QStringList& offsetFields()
     {
@@ -29,10 +48,60 @@ namespace
         return fields;
     }
 
+    ParsedPath parsePath( const QString& path )
+    {
+        if ( path == k_offsetPath )
+        {
+            return { PathKind::Offset, {} };
+        }
+        if ( path == k_totalPath )
+        {
+            return { PathKind::Total, {} };
+        }
+        if ( path == k_stacksPath )
+        {
+            return { PathKind::Stacks, {} };
+        }
+        for ( const auto& [prefix, kind] :
+              { std::pair<QString, PathKind>{ QString( k_offsetPath ) + "/",
+                                              PathKind::OffsetField },
+                std::pair<QString, PathKind>{ QString( k_totalPath ) + "/",
+                                              PathKind::TotalField } } )
+        {
+            if ( path.startsWith( prefix ) )
+            {
+                const auto field = path.mid( prefix.size() );
+                if ( offsetFields().contains( field ) )
+                {
+                    return { kind, field };
+                }
+            }
+        }
+        return {};
+    }
+
+    bool isValidStackId( const QString& id )
+    {
+        static const QRegularExpression pattern(
+            QStringLiteral( "^[A-Za-z0-9_.-]{1,64}$" ) );
+        return pattern.match( id ).hasMatch();
+    }
+
     // Floats like 0.1f would otherwise appear as 0.10000000149011612.
     double roundForWire( double value )
     {
         return std::round( value * 1e6 ) / 1e6;
+    }
+
+    QJsonObject offsetJson( float x, float y, float z, int centidegrees )
+    {
+        return QJsonObject{
+            { "x", roundForWire( static_cast<double>( x ) ) },
+            { "y", roundForWire( static_cast<double>( y ) ) },
+            { "z", roundForWire( static_cast<double>( z ) ) },
+            { "rotation",
+              roundForWire( static_cast<double>( centidegrees ) / 100.0 ) },
+        };
     }
 
     QJsonObject okReply( const QJsonValue& id, const QJsonValue& value )
@@ -45,18 +114,6 @@ namespace
         reply["ok"] = true;
         reply["value"] = value;
         return reply;
-    }
-
-    // Returns the field name for "/space/offset/<field>", or an empty string.
-    QString fieldFromPath( const QString& path )
-    {
-        if ( !path.startsWith( k_fieldPathPrefix ) )
-        {
-            return {};
-        }
-        const auto field = path.mid( static_cast<int>(
-            QString( k_fieldPathPrefix ).size() ) );
-        return offsetFields().contains( field ) ? field : QString{};
     }
 
     // Empty string when valid, otherwise a human-readable reason.
@@ -114,28 +171,76 @@ QJsonObject IpcProtocol::errorReply( const QJsonValue& id,
     return reply;
 }
 
-QJsonObject IpcProtocol::currentOffset() const
+QJsonObject IpcProtocol::userOffset() const
 {
-    return QJsonObject{
-        { "x", roundForWire( static_cast<double>( m_moveCenter.offsetX() ) ) },
-        { "y", roundForWire( static_cast<double>( m_moveCenter.offsetY() ) ) },
-        { "z", roundForWire( static_cast<double>( m_moveCenter.offsetZ() ) ) },
-        { "rotation",
-          roundForWire( static_cast<double>( m_moveCenter.rotation() )
-                        / 100.0 ) },
-    };
+    return offsetJson( m_moveCenter.offsetX(),
+                       m_moveCenter.offsetY(),
+                       m_moveCenter.offsetZ(),
+                       m_moveCenter.rotation() );
 }
 
-QJsonObject IpcProtocol::changedEvent( const QJsonObject& offset )
+QJsonObject IpcProtocol::totalOffset() const
+{
+    return offsetJson( m_moveCenter.totalOffsetX(),
+                       m_moveCenter.totalOffsetY(),
+                       m_moveCenter.totalOffsetZ(),
+                       m_moveCenter.totalRotation() );
+}
+
+QJsonObject IpcProtocol::stackOffset( const QString& stackId ) const
+{
+    const auto& stacks = m_moveCenter.offsetStacks();
+    const auto it = stacks.constFind( stackId );
+    if ( it == stacks.cend() )
+    {
+        // A missing stack contributes nothing.
+        return offsetJson( 0.0f, 0.0f, 0.0f, 0 );
+    }
+    return offsetJson( it->x, it->y, it->z, it->rotation );
+}
+
+QJsonObject IpcProtocol::stackList() const
+{
+    QJsonArray stacks;
+    const auto& all = m_moveCenter.offsetStacks();
+    for ( auto it = all.cbegin(); it != all.cend(); ++it )
+    {
+        stacks.append( QJsonObject{
+            { "id", it.key() },
+            { "persist", it->persist },
+            { "offset", offsetJson( it->x, it->y, it->z, it->rotation ) },
+        } );
+    }
+    return QJsonObject{ { "max", k_maxOffsetStacks }, { "stacks", stacks } };
+}
+
+QJsonValue IpcProtocol::snapshot( const QString& path ) const
+{
+    switch ( parsePath( path ).kind )
+    {
+    case PathKind::Offset:
+        return userOffset();
+    case PathKind::Total:
+        return totalOffset();
+    case PathKind::Stacks:
+        return stackList();
+    default:
+        return QJsonValue::Undefined;
+    }
+}
+
+QJsonObject IpcProtocol::changedEvent( const QString& path,
+                                       const QJsonValue& value )
 {
     return QJsonObject{
         { "event", "changed" },
-        { "path", k_offsetPath },
-        { "value", offset },
+        { "path", path },
+        { "value", value },
     };
 }
 
-IpcProtocol::Result IpcProtocol::handleMessage( const QString& message )
+IpcProtocol::Result IpcProtocol::handleMessage( const QString& message,
+                                                quintptr client )
 {
     QJsonParseError parseError{};
     const auto document
@@ -145,20 +250,34 @@ IpcProtocol::Result IpcProtocol::handleMessage( const QString& message )
         return { errorReply( QJsonValue::Undefined,
                              "bad_json",
                              parseError.errorString() ),
-                 SubscriptionChange::None };
+                 SubscriptionChange::None,
+                 {} };
     }
     if ( !document.isObject() )
     {
         return { errorReply( QJsonValue::Undefined,
                              "bad_json",
                              "message must be a JSON object" ),
-                 SubscriptionChange::None };
+                 SubscriptionChange::None,
+                 {} };
     }
-    return handleRequest( document.object() );
+    return handleRequest( document.object(), client );
 }
 
-IpcProtocol::Result IpcProtocol::handleRequest( const QJsonObject& request )
+IpcProtocol::Result IpcProtocol::handleRequest( const QJsonObject& request,
+                                                quintptr client )
 {
+    const auto error = [&]( const QJsonValue& id,
+                            const QString& code,
+                            const QString& message ) {
+        return Result{ errorReply( id, code, message ),
+                       SubscriptionChange::None,
+                       {} };
+    };
+    const auto ok = []( const QJsonValue& id, const QJsonValue& value ) {
+        return Result{ okReply( id, value ), SubscriptionChange::None, {} };
+    };
+
     QJsonValue id = QJsonValue::Undefined;
     if ( request.contains( "id" ) )
     {
@@ -167,10 +286,9 @@ IpcProtocol::Result IpcProtocol::handleRequest( const QJsonObject& request )
         if ( !rawId.isDouble() || std::floor( numericId ) != numericId
              || std::abs( numericId ) > k_maxSafeInteger )
         {
-            return { errorReply( QJsonValue::Undefined,
-                                 "bad_value",
-                                 "id must be an integer" ),
-                     SubscriptionChange::None };
+            return error( QJsonValue::Undefined,
+                          "bad_value",
+                          "id must be an integer" );
         }
         id = rawId;
     }
@@ -178,8 +296,7 @@ IpcProtocol::Result IpcProtocol::handleRequest( const QJsonObject& request )
     const auto opValue = request.value( "op" );
     if ( !opValue.isString() )
     {
-        return { errorReply( id, "bad_op", "op must be a string" ),
-                 SubscriptionChange::None };
+        return error( id, "bad_op", "op must be a string" );
     }
     const auto op = opValue.toString();
 
@@ -187,96 +304,176 @@ IpcProtocol::Result IpcProtocol::handleRequest( const QJsonObject& request )
     {
         if ( !hasOnlyKeys( request, { "id", "op" } ) )
         {
-            return { errorReply( id, "bad_value", "unexpected field" ),
-                     SubscriptionChange::None };
+            return error( id, "bad_value", "unexpected field" );
         }
-        const QJsonObject value{
-            { "name", "OVRAS" },
-            { "protocol", k_protocolVersion },
-            { "version", m_appVersion },
-        };
-        return { okReply( id, value ), SubscriptionChange::None };
+        return ok( id,
+                   QJsonObject{
+                       { "name", "OVRAS" },
+                       { "protocol", k_protocolVersion },
+                       { "version", m_appVersion },
+                       { "features", QJsonArray{ "stacks" } },
+                   } );
     }
 
     const bool isWrite = op == "set" || op == "add";
-    const bool isKnownOp = isWrite || op == "get" || op == "subscribe"
-                           || op == "unsubscribe";
-    if ( !isKnownOp )
+    const bool isSubscription = op == "subscribe" || op == "unsubscribe";
+    if ( !isWrite && !isSubscription && op != "get" && op != "reset" )
     {
-        return { errorReply( id, "bad_op", "unknown op: " + op ),
-                 SubscriptionChange::None };
+        return error( id, "bad_op", "unknown op: " + op );
     }
 
     const auto pathValue = request.value( "path" );
     if ( !pathValue.isString() )
     {
-        return { errorReply( id, "bad_path", "path must be a string" ),
-                 SubscriptionChange::None };
+        return error( id, "bad_path", "path must be a string" );
     }
     const auto path = pathValue.toString();
-    const bool isWholePath = path == k_offsetPath;
-    const auto field = fieldFromPath( path );
-    if ( !isWholePath && field.isEmpty() )
+    const auto parsed = parsePath( path );
+    if ( parsed.kind == PathKind::Unknown )
     {
-        return { errorReply( id, "bad_path", "unknown path: " + path ),
-                 SubscriptionChange::None };
+        return error( id, "bad_path", "unknown path: " + path );
+    }
+    const bool isOffsetPath = parsed.kind == PathKind::Offset
+                              || parsed.kind == PathKind::OffsetField;
+
+    // Which paths each op accepts.
+    if ( ( isWrite && !isOffsetPath )
+         || ( op == "reset" && parsed.kind != PathKind::Offset )
+         || ( isSubscription && parsed.kind != PathKind::Offset
+              && parsed.kind != PathKind::Total
+              && parsed.kind != PathKind::Stacks ) )
+    {
+        return error( id, "bad_path", op + " is not supported on " + path );
     }
 
-    const QStringList allowedKeys
-        = isWrite ? QStringList{ "id", "op", "path", "value" }
-                  : QStringList{ "id", "op", "path" };
+    // Which fields each op accepts.
+    QStringList allowedKeys{ "id", "op", "path" };
+    if ( isWrite )
+    {
+        allowedKeys << "value" << "stack" << "persist" << "pivot";
+    }
+    else if ( ( op == "get" && isOffsetPath ) || op == "reset" )
+    {
+        allowedKeys << "stack";
+    }
     if ( !hasOnlyKeys( request, allowedKeys ) )
     {
-        return { errorReply( id, "bad_value", "unexpected field" ),
-                 SubscriptionChange::None };
+        return error( id, "bad_value", "unexpected field for " + op );
+    }
+
+    QString stackId;
+    if ( request.contains( "stack" ) )
+    {
+        const auto stackValue = request.value( "stack" );
+        if ( !stackValue.isString() || !isValidStackId( stackValue.toString() ) )
+        {
+            return error( id,
+                          "bad_value",
+                          "stack must match ^[A-Za-z0-9_.-]{1,64}$" );
+        }
+        stackId = stackValue.toString();
     }
 
     if ( op == "get" )
     {
-        const auto offset = currentOffset();
-        return { okReply( id,
-                          isWholePath ? QJsonValue( offset )
-                                      : offset.value( field ) ),
-                 SubscriptionChange::None };
+        switch ( parsed.kind )
+        {
+        case PathKind::Offset:
+            return ok( id,
+                       stackId.isEmpty() ? userOffset()
+                                         : stackOffset( stackId ) );
+        case PathKind::OffsetField:
+            return ok( id,
+                       ( stackId.isEmpty() ? userOffset()
+                                           : stackOffset( stackId ) )
+                           .value( parsed.field ) );
+        case PathKind::Total:
+            return ok( id, totalOffset() );
+        case PathKind::TotalField:
+            return ok( id, totalOffset().value( parsed.field ) );
+        case PathKind::Stacks:
+            return ok( id, stackList() );
+        case PathKind::Unknown:
+            break;
+        }
+        return error( id, "internal", "unhandled path" );
     }
 
     if ( isWrite )
     {
-        return { handleWrite( id, path, request.value( "value" ), op == "add" ),
-                 SubscriptionChange::None };
+        return { handleWrite( id, request, parsed.field, op == "add", client ),
+                 SubscriptionChange::None,
+                 {} };
     }
 
-    // subscribe / unsubscribe only work on the whole offset.
-    if ( !isWholePath )
+    if ( op == "reset" )
     {
-        return { errorReply( id,
-                             "bad_path",
-                             op + " is only supported on /space/offset" ),
-                 SubscriptionChange::None };
+        if ( stackId.isEmpty() )
+        {
+            // Same as the user's Reset Offsets action: stacks are kept.
+            m_moveCenter.resetOffsets( true );
+        }
+        else
+        {
+            m_moveCenter.removeOffsetStack( stackId );
+        }
+        return ok( id, QJsonValue::Null );
     }
+
     if ( op == "subscribe" )
     {
-        return { okReply( id, currentOffset() ),
-                 SubscriptionChange::Subscribe };
+        return { okReply( id, snapshot( path ) ),
+                 SubscriptionChange::Subscribe,
+                 path };
     }
     return { okReply( id, QJsonValue::Null ),
-             SubscriptionChange::Unsubscribe };
+             SubscriptionChange::Unsubscribe,
+             path };
 }
 
 QJsonObject IpcProtocol::handleWrite( const QJsonValue& id,
-                                      const QString& path,
-                                      const QJsonValue& value,
-                                      bool relative )
+                                      const QJsonObject& request,
+                                      const QString& field,
+                                      bool relative,
+                                      quintptr client )
 {
-    // Collect and validate everything first so a bad request changes nothing.
-    QList<QPair<QString, double>> updates;
+    const QString stackId = request.value( "stack" ).toString();
+    const auto value = request.value( "value" );
 
-    if ( path == k_offsetPath )
+    // Validate everything first so a bad request changes nothing.
+    if ( request.contains( "persist" ) )
+    {
+        if ( !request.value( "persist" ).isBool() )
+        {
+            return errorReply( id, "bad_value", "persist must be a boolean" );
+        }
+        if ( stackId.isEmpty() )
+        {
+            return errorReply(
+                id, "bad_value", "persist is only allowed with stack" );
+        }
+    }
+
+    bool pivotHmd = !m_moveCenter.universeCenteredRotation();
+    if ( request.contains( "pivot" ) )
+    {
+        const auto pivot = request.value( "pivot" ).toString();
+        if ( pivot != "hmd" && pivot != "origin" )
+        {
+            return errorReply(
+                id, "bad_value", "pivot must be \"hmd\" or \"origin\"" );
+        }
+        pivotHmd = pivot == "hmd";
+    }
+
+    QList<QPair<QString, double>> updates;
+    if ( field.isEmpty() )
     {
         if ( !value.isObject() )
         {
-            return errorReply(
-                id, "bad_value", "value must be an object for " + path );
+            return errorReply( id,
+                               "bad_value",
+                               "value must be an object for /space/offset" );
         }
         const auto object = value.toObject();
         if ( object.isEmpty() )
@@ -292,69 +489,100 @@ QJsonObject IpcProtocol::handleWrite( const QJsonValue& id,
         }
         // Rotation first: rotating around the headset shifts x/z, and an
         // absolute x/z in the same request must win.
-        for ( const auto& field : { QString( "rotation" ),
-                                    QString( "x" ),
-                                    QString( "y" ),
-                                    QString( "z" ) } )
+        for ( const auto& name : { QString( "rotation" ),
+                                   QString( "x" ),
+                                   QString( "y" ),
+                                   QString( "z" ) } )
         {
-            if ( !object.contains( field ) )
+            if ( !object.contains( name ) )
             {
                 continue;
             }
-            const auto error = validateNumber( field, object.value( field ) );
-            if ( !error.isEmpty() )
+            const auto problem = validateNumber( name, object.value( name ) );
+            if ( !problem.isEmpty() )
             {
-                return errorReply( id, "bad_value", error );
+                return errorReply( id, "bad_value", problem );
             }
-            updates.append( { field, object.value( field ).toDouble() } );
+            updates.append( { name, object.value( name ).toDouble() } );
         }
     }
     else
     {
-        const auto field = fieldFromPath( path );
-        const auto error = validateNumber( field, value );
-        if ( !error.isEmpty() )
+        const auto problem = validateNumber( field, value );
+        if ( !problem.isEmpty() )
         {
-            return errorReply( id, "bad_value", error );
+            return errorReply( id, "bad_value", problem );
         }
         updates.append( { field, value.toDouble() } );
     }
 
+    // ---- user offset ----
+    if ( stackId.isEmpty() )
+    {
+        for ( const auto& update : updates )
+        {
+            if ( update.first == "rotation" )
+            {
+                const int centidegrees = qRound( update.second * 100.0 );
+                m_moveCenter.setRotationWithPivot(
+                    relative ? m_moveCenter.rotation() + centidegrees
+                             : centidegrees,
+                    pivotHmd );
+                continue;
+            }
+            // Axis locks apply to the user offset (mod/set respect them).
+            const auto meters = static_cast<float>( update.second );
+            if ( update.first == "x" )
+            {
+                relative ? m_moveCenter.modOffsetX( meters )
+                         : m_moveCenter.setOffsetX( meters );
+            }
+            else if ( update.first == "y" )
+            {
+                relative ? m_moveCenter.modOffsetY( meters )
+                         : m_moveCenter.setOffsetY( meters );
+            }
+            else
+            {
+                relative ? m_moveCenter.modOffsetZ( meters )
+                         : m_moveCenter.setOffsetZ( meters );
+            }
+        }
+        return okReply( id, userOffset() );
+    }
+
+    // ---- offset stack ----
+    auto* stack = m_moveCenter.acquireOffsetStack( stackId, client );
+    if ( stack == nullptr )
+    {
+        return errorReply(
+            id,
+            "stack_limit",
+            QString( "at most %1 offset stacks" ).arg( k_maxOffsetStacks ) );
+    }
+    if ( request.contains( "persist" ) )
+    {
+        stack->persist = request.value( "persist" ).toBool();
+    }
     for ( const auto& update : updates )
     {
-        applyField( update.first, update.second, relative );
+        if ( update.first == "rotation" )
+        {
+            const int centidegrees = qRound( update.second * 100.0 );
+            m_moveCenter.setOffsetStackRotation(
+                stackId,
+                relative ? stack->rotation + centidegrees : centidegrees,
+                pivotHmd );
+            continue;
+        }
+        // Axis locks do not apply to stacks.
+        const auto meters = static_cast<float>( update.second );
+        float& target = update.first == "x"   ? stack->x
+                        : update.first == "y" ? stack->y
+                                              : stack->z;
+        target = relative ? target + meters : meters;
     }
-    return okReply( id, currentOffset() );
-}
-
-void IpcProtocol::applyField( const QString& field,
-                              double value,
-                              bool relative )
-{
-    if ( field == "rotation" )
-    {
-        const int centidegrees = qRound( value * 100.0 );
-        m_moveCenter.setRotation(
-            relative ? m_moveCenter.rotation() + centidegrees : centidegrees );
-        return;
-    }
-
-    const auto meters = static_cast<float>( value );
-    if ( field == "x" )
-    {
-        relative ? m_moveCenter.modOffsetX( meters )
-                 : m_moveCenter.setOffsetX( meters );
-    }
-    else if ( field == "y" )
-    {
-        relative ? m_moveCenter.modOffsetY( meters )
-                 : m_moveCenter.setOffsetY( meters );
-    }
-    else if ( field == "z" )
-    {
-        relative ? m_moveCenter.modOffsetZ( meters )
-                 : m_moveCenter.setOffsetZ( meters );
-    }
+    return okReply( id, stackOffset( stackId ) );
 }
 
 } // namespace advsettings

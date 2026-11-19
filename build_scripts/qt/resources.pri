@@ -29,6 +29,7 @@ DISTFILES += \
     src/res/qml/chaperone_page/chaperone_additional/chaperonemisc/* \
     src/res/qml/FixFloorPage.qml \
     src/res/qml/PlayspacePage.qml \
+    src/res/qml/OffsetStacksPage.qml \
     src/res/qml/motion_page/* \
     src/res/qml/motion_page/gravity/* \
     src/res/qml/motion_page/height_toggle/* \

@@ -52,6 +52,11 @@ Rectangle {
         visible: false
     }
 
+    property OffsetStacksPage offsetStacksPage: OffsetStacksPage {
+        stackView: mainView
+        visible: false
+    }
+
     property MotionPage motionPage: MotionPage {
         stackView: mainView
         visible: false

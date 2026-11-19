@@ -136,6 +136,196 @@ void MoveCenterTabController::addOffset( float offset[] )
     updateSpace( true );
 }
 
+// ---- Offset stacks --------------------------------------------------------
+
+float MoveCenterTabController::totalOffsetX() const
+{
+    float sum = m_offsetX;
+    for ( const auto& stack : m_offsetStacks )
+    {
+        sum += stack.x;
+    }
+    return sum;
+}
+
+float MoveCenterTabController::totalOffsetY() const
+{
+    float sum = m_offsetY;
+    for ( const auto& stack : m_offsetStacks )
+    {
+        sum += stack.y;
+    }
+    return sum;
+}
+
+float MoveCenterTabController::totalOffsetZ() const
+{
+    float sum = m_offsetZ;
+    for ( const auto& stack : m_offsetStacks )
+    {
+        sum += stack.z;
+    }
+    return sum;
+}
+
+int MoveCenterTabController::totalRotation() const
+{
+    int sum = m_rotation;
+    for ( const auto& stack : m_offsetStacks )
+    {
+        sum += stack.rotation;
+    }
+    return sum;
+}
+
+const QMap<QString, OffsetStack>& MoveCenterTabController::offsetStacks() const
+{
+    return m_offsetStacks;
+}
+
+OffsetStack* MoveCenterTabController::acquireOffsetStack( const QString& id,
+                                                          quintptr owner )
+{
+    auto it = m_offsetStacks.find( id );
+    if ( it == m_offsetStacks.end() )
+    {
+        if ( m_offsetStacks.size() >= k_maxOffsetStacks )
+        {
+            return nullptr;
+        }
+        it = m_offsetStacks.insert( id, OffsetStack{} );
+        LOG( INFO ) << "Offset stack created: " << id.toStdString();
+        emit offsetStacksChanged();
+    }
+    it->owner = owner;
+    return &it.value();
+}
+
+void MoveCenterTabController::setOffsetStackRotation( const QString& id,
+                                                      int centidegrees,
+                                                      bool pivotHmd )
+{
+    auto it = m_offsetStacks.find( id );
+    if ( it == m_offsetStacks.end() || it->rotation == centidegrees )
+    {
+        return;
+    }
+    if ( pivotHmd )
+    {
+        double dx = 0.0;
+        double dz = 0.0;
+        hmdPivotShift(
+            ( centidegrees - it->rotation ) * k_centidegreesToRadians, dx, dz );
+        it->x += static_cast<float>( dx );
+        it->z += static_cast<float>( dz );
+    }
+    it->rotation = centidegrees;
+}
+
+void MoveCenterTabController::setRotationWithPivot( int centidegrees,
+                                                    bool pivotHmd )
+{
+    if ( m_rotation == centidegrees )
+    {
+        return;
+    }
+    if ( pivotHmd )
+    {
+        double dx = 0.0;
+        double dz = 0.0;
+        hmdPivotShift(
+            ( centidegrees - m_rotation ) * k_centidegreesToRadians, dx, dz );
+        m_offsetX += static_cast<float>( dx );
+        m_offsetZ += static_cast<float>( dz );
+        emit offsetXChanged( m_offsetX );
+        emit offsetZChanged( m_offsetZ );
+    }
+    m_rotation = centidegrees;
+    emit rotationChanged( m_rotation );
+}
+
+bool MoveCenterTabController::removeOffsetStack( const QString& id )
+{
+    if ( m_offsetStacks.remove( id ) == 0 )
+    {
+        return false;
+    }
+    LOG( INFO ) << "Offset stack removed: " << id.toStdString();
+    emit offsetStacksChanged();
+    return true;
+}
+
+void MoveCenterTabController::removeOffsetStacksOwnedBy( quintptr owner )
+{
+    bool removed = false;
+    for ( auto it = m_offsetStacks.begin(); it != m_offsetStacks.end(); )
+    {
+        if ( !it->persist && it->owner == owner )
+        {
+            LOG( INFO ) << "Offset stack removed (owner gone): "
+                        << it.key().toStdString();
+            it = m_offsetStacks.erase( it );
+            removed = true;
+        }
+        else
+        {
+            ++it;
+        }
+    }
+    if ( removed )
+    {
+        emit offsetStacksChanged();
+    }
+}
+
+void MoveCenterTabController::clearOffsetStacks()
+{
+    if ( m_offsetStacks.isEmpty() )
+    {
+        return;
+    }
+    LOG( INFO ) << "All offset stacks removed";
+    m_offsetStacks.clear();
+    emit offsetStacksChanged();
+}
+
+QVariantList MoveCenterTabController::offsetStackList() const
+{
+    QVariantList list;
+    for ( auto it = m_offsetStacks.cbegin(); it != m_offsetStacks.cend(); ++it )
+    {
+        list.append( QVariantMap{
+            { "id", it.key() },
+            { "x", static_cast<double>( it->x ) },
+            { "y", static_cast<double>( it->y ) },
+            { "z", static_cast<double>( it->z ) },
+            { "rotation", it->rotation / 100.0 },
+            { "persist", it->persist },
+        } );
+    }
+    return list;
+}
+
+QVariantMap MoveCenterTabController::totalOffsetMap() const
+{
+    return QVariantMap{
+        { "x", static_cast<double>( totalOffsetX() ) },
+        { "y", static_cast<double>( totalOffsetY() ) },
+        { "z", static_cast<double>( totalOffsetZ() ) },
+        { "rotation", totalRotation() / 100.0 },
+    };
+}
+
+void MoveCenterTabController::resetOffsetStack( const QString& id )
+{
+    removeOffsetStack( id );
+}
+
+void MoveCenterTabController::resetAllOffsetStacks()
+{
+    clearOffsetStacks();
+}
+
 void MoveCenterTabController::addCurOffsetAsCenter()
 {
     float off[3] = { -m_offsetX, m_offsetY, -m_offsetZ };
@@ -354,50 +544,8 @@ void MoveCenterTabController::setRotation( int value, bool notify )
 
         double angle = ( value - m_rotation ) * k_centidegreesToRadians;
 
-        // Get hmd pose matrix.
-        vr::TrackedDevicePose_t
-            devicePosesForRot[vr::k_unMaxTrackedDeviceCount];
-
-        // source must be current universe
-        if ( m_trackingUniverse == vr::TrackingUniverseSeated )
-        {
-            vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(
-                vr::TrackingUniverseSeated,
-                0.0f,
-                devicePosesForRot,
-                vr::k_unMaxTrackedDeviceCount );
-        }
-        else
-        {
-            vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(
-                vr::TrackingUniverseStanding,
-                0.0f,
-                devicePosesForRot,
-                vr::k_unMaxTrackedDeviceCount );
-        }
-
-        vr::HmdMatrix34_t oldHmdPos
-            = devicePosesForRot[0].mDeviceToAbsoluteTracking;
-
-        // Set up xyz coordinate values from pose matrix.
-        double oldHmdXyz[3] = { static_cast<double>( oldHmdPos.m[0][3] ),
-                                static_cast<double>( oldHmdPos.m[1][3] ),
-                                static_cast<double>( oldHmdPos.m[2][3] ) };
-        double newHmdXyz[3] = { static_cast<double>( oldHmdPos.m[0][3] ),
-                                static_cast<double>( oldHmdPos.m[1][3] ),
-                                static_cast<double>( oldHmdPos.m[2][3] ) };
-
-        // Convert oldHmdXyz into un-rotated coordinates.
-        double oldAngle = -m_rotation * k_centidegreesToRadians;
-        rotateCoordinates( oldHmdXyz, oldAngle );
-
-        // Set newHmdXyz to have additional rotation from incoming angle change.
-        rotateCoordinates( newHmdXyz, oldAngle - angle );
-
-        // find difference in x,z offset due to incoming angle change
-        // (coordinates are in un-rotated axis).
-        double hmdRotDiff[3]
-            = { oldHmdXyz[0] - newHmdXyz[0], 0, oldHmdXyz[2] - newHmdXyz[2] };
+        double hmdRotDiff[3] = { 0.0, 0.0, 0.0 };
+        hmdPivotShift( angle, hmdRotDiff[0], hmdRotDiff[2] );
 
         m_rotation = value;
         if ( notify )
@@ -414,6 +562,45 @@ void MoveCenterTabController::setRotation( int value, bool notify )
             emit offsetZChanged( m_offsetZ );
         }
     }
+}
+
+void MoveCenterTabController::hmdPivotShift( double deltaRadians,
+                                            double& dx,
+                                            double& dz ) const
+{
+    // Get hmd pose matrix.
+    vr::TrackedDevicePose_t devicePosesForRot[vr::k_unMaxTrackedDeviceCount];
+
+    // source must be current universe
+    vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(
+        m_trackingUniverse == vr::TrackingUniverseSeated
+            ? vr::TrackingUniverseSeated
+            : vr::TrackingUniverseStanding,
+        0.0f,
+        devicePosesForRot,
+        vr::k_unMaxTrackedDeviceCount );
+
+    const vr::HmdMatrix34_t oldHmdPos
+        = devicePosesForRot[0].mDeviceToAbsoluteTracking;
+
+    // Set up xyz coordinate values from pose matrix.
+    double oldHmdXyz[3] = { static_cast<double>( oldHmdPos.m[0][3] ),
+                            static_cast<double>( oldHmdPos.m[1][3] ),
+                            static_cast<double>( oldHmdPos.m[2][3] ) };
+    double newHmdXyz[3] = { oldHmdXyz[0], oldHmdXyz[1], oldHmdXyz[2] };
+
+    // Convert oldHmdXyz into un-rotated coordinates. The applied rotation is
+    // the total (user + offset stacks).
+    const double oldAngle = -totalRotation() * k_centidegreesToRadians;
+    rotateCoordinates( oldHmdXyz, oldAngle );
+
+    // Set newHmdXyz to have additional rotation from incoming angle change.
+    rotateCoordinates( newHmdXyz, oldAngle - deltaRadians );
+
+    // difference in x,z offset due to incoming angle change
+    // (coordinates are in un-rotated axis).
+    dx = oldHmdXyz[0] - newHmdXyz[0];
+    dz = oldHmdXyz[2] - newHmdXyz[2];
 }
 
 void MoveCenterTabController::setTempRotation( int value, bool notify )
@@ -966,6 +1153,22 @@ void MoveCenterTabController::reset()
     m_lastMoveHand = vr::TrackedControllerRole_Invalid;
     m_lastRotateHand = vr::TrackedControllerRole_Invalid;
 
+    // Called directly, this is the safety/full reset (out-of-bounds, room
+    // setup, seated exit), so software offset stacks go too. The user's
+    // Reset button (userReset) and Reset Offsets action (resetOffsets) keep
+    // them.
+    if ( !m_keepStacksOnReset )
+    {
+        ++m_safetyResetCount;
+    }
+    if ( !m_keepStacksOnReset && !m_offsetStacks.isEmpty() )
+    {
+        LOG( INFO ) << "Reset: clearing " << m_offsetStacks.size()
+                    << " offset stack(s)";
+        m_offsetStacks.clear();
+        emit offsetStacksChanged();
+    }
+
     // Option 1: Does not save
     updateSpace( true );
     updateChaperoneResetData();
@@ -1002,8 +1205,43 @@ void MoveCenterTabController::reset()
     emit rotationChanged( m_rotation );
 }
 
-//TODO This needs to be renamed, it's mainly for initilization reasons
+void MoveCenterTabController::userReset()
+{
+    m_keepStacksOnReset = true;
+    reset();
+    m_keepStacksOnReset = false;
+}
+
 void MoveCenterTabController::zeroOffsets()
+{
+    // zeroOffsets bakes the currently applied universe center into the basis.
+    // Offset stacks are dynamic contributions from other software and must not
+    // be baked in, so take them out of the applied pose first and put them
+    // back afterwards.
+    if ( m_offsetStacks.isEmpty() || !m_chaperoneBasisAcquired )
+    {
+        zeroOffsetsImpl();
+        return;
+    }
+    const auto stacks = m_offsetStacks;
+    const auto resetCount = m_safetyResetCount;
+    m_offsetStacks.clear();
+    updateSpace( true );
+    zeroOffsetsImpl();
+    // If zeroOffsetsImpl performed a safety reset, stacks stay cleared.
+    if ( m_safetyResetCount == resetCount )
+    {
+        m_offsetStacks = stacks;
+    }
+    else
+    {
+        emit offsetStacksChanged();
+    }
+    updateSpace( true );
+}
+
+//TODO This needs to be renamed, it's mainly for initilization reasons
+void MoveCenterTabController::zeroOffsetsImpl()
 {
     // first we'll check if we're outside the max commit distance
 
@@ -1019,7 +1257,7 @@ void MoveCenterTabController::zeroOffsets()
     // unrotate to get raw values of xyz
     rotateCoordinates( currentCenterXyz,
                        currentCenterYaw
-                           - ( m_rotation * k_centidegreesToRadians ) );
+                           - ( totalRotation() * k_centidegreesToRadians ) );
     if ( abs( currentCenterXyz[0] ) > k_maxOpenvrCommitOffset )
     {
         LOG( INFO ) << "Attempted Zero Offsets out of commit bounds ( X: "
@@ -2199,10 +2437,13 @@ void MoveCenterTabController::updateHandDrag(
     };
 
     rotateCoordinates( relativeControllerPosition, -angle );
+    // Use the applied (total) offset so that offset stacks moving the space
+    // are not mistaken for hand movement; the resulting diff is still applied
+    // to the user's offset only.
     float absoluteControllerPosition[] = {
-        static_cast<float>( relativeControllerPosition[0] ) + m_offsetX,
-        static_cast<float>( relativeControllerPosition[1] ) + m_offsetY,
-        static_cast<float>( relativeControllerPosition[2] ) + m_offsetZ,
+        static_cast<float>( relativeControllerPosition[0] ) + totalOffsetX(),
+        static_cast<float>( relativeControllerPosition[1] ) + totalOffsetY(),
+        static_cast<float>( relativeControllerPosition[2] ) + totalOffsetZ(),
     };
 
     if ( m_lastMoveHand == m_activeDragHand )
@@ -2496,16 +2737,22 @@ void MoveCenterTabController::updateGravity()
 
 void MoveCenterTabController::updateSpace( bool forceUpdate )
 {
+    // The applied offset is the user's offset plus all offset stacks.
+    const float totalX = totalOffsetX();
+    const float totalY = totalOffsetY();
+    const float totalZ = totalOffsetZ();
+    const int totalRot = totalRotation();
+
     // Do nothing if all offsets and rotation are still the same...
-    if ( ( abs( m_offsetX - m_oldOffsetX ) + abs( m_offsetY - m_oldOffsetY )
-           + abs( m_offsetZ - m_oldOffsetZ ) )
+    if ( ( abs( totalX - m_oldOffsetX ) + abs( totalY - m_oldOffsetY )
+           + abs( totalZ - m_oldOffsetZ ) )
              == 0
-         && m_rotation == m_oldRotation && !forceUpdate )
+         && totalRot == m_oldRotation && !forceUpdate )
     {
         return;
     }
-    if ( ( abs( m_offsetX ) + abs( m_offsetY ) + abs( m_offsetZ )
-           + abs( static_cast<float>( m_rotation ) ) )
+    if ( ( abs( totalX ) + abs( totalY ) + abs( totalZ )
+           + abs( static_cast<float>( totalRot ) ) )
              == 0
          && !forceUpdate )
     {
@@ -2524,7 +2771,7 @@ void MoveCenterTabController::updateSpace( bool forceUpdate )
     utils::initRotationMatrix(
         rotationMatrix,
         1,
-        static_cast<float>( m_rotation * k_centidegreesToRadians ) );
+        static_cast<float>( totalRot * k_centidegreesToRadians ) );
     utils::matMul33(
         offsetUniverseCenter, rotationMatrix, m_universeCenterForReset );
     // fill in matrix coordinates for basis universe zero point
@@ -2534,25 +2781,25 @@ void MoveCenterTabController::updateSpace( bool forceUpdate )
 
     // move offsetUniverseCenter to the current offsets
     offsetUniverseCenter.m[0][3]
-        += m_universeCenterForReset.m[0][0] * m_offsetX;
+        += m_universeCenterForReset.m[0][0] * totalX;
     offsetUniverseCenter.m[1][3]
-        += m_universeCenterForReset.m[1][0] * m_offsetX;
+        += m_universeCenterForReset.m[1][0] * totalX;
     offsetUniverseCenter.m[2][3]
-        += m_universeCenterForReset.m[2][0] * m_offsetX;
+        += m_universeCenterForReset.m[2][0] * totalX;
 
     offsetUniverseCenter.m[0][3]
-        += m_universeCenterForReset.m[0][1] * m_offsetY;
+        += m_universeCenterForReset.m[0][1] * totalY;
     offsetUniverseCenter.m[1][3]
-        += m_universeCenterForReset.m[1][1] * m_offsetY;
+        += m_universeCenterForReset.m[1][1] * totalY;
     offsetUniverseCenter.m[2][3]
-        += m_universeCenterForReset.m[2][1] * m_offsetY;
+        += m_universeCenterForReset.m[2][1] * totalY;
 
     offsetUniverseCenter.m[0][3]
-        += m_universeCenterForReset.m[0][2] * m_offsetZ;
+        += m_universeCenterForReset.m[0][2] * totalZ;
     offsetUniverseCenter.m[1][3]
-        += m_universeCenterForReset.m[1][2] * m_offsetZ;
+        += m_universeCenterForReset.m[1][2] * totalZ;
     offsetUniverseCenter.m[2][3]
-        += m_universeCenterForReset.m[2][2] * m_offsetZ;
+        += m_universeCenterForReset.m[2][2] * totalZ;
 
     // check if we just pushed offsetUniverseCenter out of bounds (40km)
     // (we reuse offsetUniverseCenterYaw to rotate the chaperone also)
@@ -2567,7 +2814,7 @@ void MoveCenterTabController::updateSpace( bool forceUpdate )
 
     rotateCoordinates( offsetUniverseCenterXyz,
                        offsetUniverseCenterYaw
-                           - ( m_rotation * k_centidegreesToRadians ) );
+                           - ( totalRot * k_centidegreesToRadians ) );
 
     if ( abs( offsetUniverseCenterXyz[0] ) > k_maxOpenvrWorkingSetOffest
          || ( abs( offsetUniverseCenterXyz[0] )
@@ -2636,25 +2883,25 @@ void MoveCenterTabController::updateSpace( bool forceUpdate )
 
         // move offsetSeatedCenter to the current offsets
         offsetSeatedCenter.m[0][3]
-            += m_seatedCenterForReset.m[0][0] * m_offsetX;
+            += m_seatedCenterForReset.m[0][0] * totalX;
         offsetSeatedCenter.m[1][3]
-            += m_seatedCenterForReset.m[1][0] * m_offsetX;
+            += m_seatedCenterForReset.m[1][0] * totalX;
         offsetSeatedCenter.m[2][3]
-            += m_seatedCenterForReset.m[2][0] * m_offsetX;
+            += m_seatedCenterForReset.m[2][0] * totalX;
 
         offsetSeatedCenter.m[0][3]
-            += m_seatedCenterForReset.m[0][1] * m_offsetY;
+            += m_seatedCenterForReset.m[0][1] * totalY;
         offsetSeatedCenter.m[1][3]
-            += m_seatedCenterForReset.m[1][1] * m_offsetY;
+            += m_seatedCenterForReset.m[1][1] * totalY;
         offsetSeatedCenter.m[2][3]
-            += m_seatedCenterForReset.m[2][1] * m_offsetY;
+            += m_seatedCenterForReset.m[2][1] * totalY;
 
         offsetSeatedCenter.m[0][3]
-            += m_seatedCenterForReset.m[0][2] * m_offsetZ;
+            += m_seatedCenterForReset.m[0][2] * totalZ;
         offsetSeatedCenter.m[1][3]
-            += m_seatedCenterForReset.m[1][2] * m_offsetZ;
+            += m_seatedCenterForReset.m[1][2] * totalZ;
         offsetSeatedCenter.m[2][3]
-            += m_seatedCenterForReset.m[2][2] * m_offsetZ;
+            += m_seatedCenterForReset.m[2][2] * totalZ;
 
         vr::VRChaperoneSetup()->SetWorkingSeatedZeroPoseToRawTrackingPose(
             &offsetSeatedCenter );
@@ -2681,7 +2928,7 @@ void MoveCenterTabController::updateSpace( bool forceUpdate )
         utils::initRotationMatrix(
             rotMatrix,
             1,
-            static_cast<float>( -( ( m_rotation * k_centidegreesToRadians )
+            static_cast<float>( -( ( totalRot * k_centidegreesToRadians )
                                    + offsetUniverseCenterYaw ) ) );
 
         // Rotates orientation At playspace center
@@ -2714,10 +2961,10 @@ void MoveCenterTabController::updateSpace( bool forceUpdate )
         parent->chaperoneUtils().loadChaperoneData( false );
     }
 
-    m_oldOffsetX = m_offsetX;
-    m_oldOffsetY = m_offsetY;
-    m_oldOffsetZ = m_offsetZ;
-    m_oldRotation = m_rotation;
+    m_oldOffsetX = totalX;
+    m_oldOffsetY = totalY;
+    m_oldOffsetZ = totalZ;
+    m_oldRotation = totalRot;
 }
 
 void MoveCenterTabController::eventLoopTick(
@@ -2780,8 +3027,8 @@ void MoveCenterTabController::eventLoopTick(
     }
     setTrackingUniverse( int( universe ) );
 
-    // get current space rotation in radians
-    double angle = m_rotation * k_centidegreesToRadians;
+    // get current (applied: user + offset stacks) space rotation in radians
+    double angle = totalRotation() * k_centidegreesToRadians;
 
     // hmd rotations stats counting doesn't need to be smooth, so we
     // skip some frames for performance

@@ -51,12 +51,15 @@ private slots:
 
 private:
     void sendJson( QWebSocket* client, const QJsonObject& object );
+    void removeSubscriber( QWebSocket* client, const QString& path );
+    void forgetClient( QWebSocket* client );
 
+    MoveCenterTabController& m_moveCenter;
     IpcProtocol m_protocol;
     QWebSocketServer m_server;
     QList<QWebSocket*> m_clients;
-    // Subscriber -> last offset sent to it.
-    QHash<QWebSocket*, QJsonObject> m_subscribers;
+    // Subscriber -> (path -> last value sent for that path).
+    QHash<QWebSocket*, QHash<QString, QJsonValue>> m_subscribers;
     QTimer m_pushTimer;
     QString m_lastError;
 };

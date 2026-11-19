@@ -2,6 +2,10 @@
 #pragma once
 
 #include <QObject>
+#include <QMap>
+#include <QString>
+#include <QVariantList>
+#include <QVariantMap>
 #include <openvr.h>
 #include <chrono>
 #include <qmath.h>
@@ -29,6 +33,23 @@ constexpr double k_maxOpenvrCommitOffset = 990.0;
 constexpr double k_maxOvrasUniverseCenteredTurningOffset = 25000.0;
 
 class OverlayController;
+
+// An offset contributed by external software (see docs/ipc). The playspace is
+// placed at user offset + sum of all stacks; translations and yaws are summed,
+// so stacking is order-independent.
+struct OffsetStack
+{
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    int rotation = 0; // centidegrees
+    // false: removed when the owner (e.g. an IPC connection) goes away.
+    bool persist = false;
+    // Opaque id of the last writer; 0 = none (UI).
+    quintptr owner = 0;
+};
+
+constexpr int k_maxOffsetStacks = 32;
 
 struct OffsetProfile : settings::ISettingsObject
 {
@@ -224,7 +245,15 @@ private:
     void updateHandTurn( vr::TrackedDevicePose_t* devicePoses, double angle );
     void updateGravity();
     void updateSpace( bool forceUpdate = false );
+    void zeroOffsetsImpl();
+    // Translation (un-rotated frame) that keeps the HMD in place when the
+    // total rotation changes by deltaRadians.
+    void hmdPivotShift( double deltaRadians, double& dx, double& dz ) const;
     void clampVelocity( double* velocity );
+
+    QMap<QString, OffsetStack> m_offsetStacks;
+    unsigned m_safetyResetCount = 0;
+    bool m_keepStacksOnReset = false;
     void applyChaperoneResetData();
     // void saveUncommittedChaperone();
     void outputLogHmdMatrix( vr::HmdMatrix34_t hmdMatrix );
@@ -282,6 +311,33 @@ public:
     Q_INVOKABLE QString getOffsetProfileName( unsigned index );
 
     void addOffset( float offset[3] );
+
+    // Offset stacks (external software offsets). Totals = user + all stacks.
+    float totalOffsetX() const;
+    float totalOffsetY() const;
+    float totalOffsetZ() const;
+    int totalRotation() const;
+    const QMap<QString, OffsetStack>& offsetStacks() const;
+    // Returns nullptr if the id does not exist and k_maxOffsetStacks are in
+    // use. Updates the owner to `owner`. Field edits are applied to the
+    // playspace on the next event loop tick, like user offset edits.
+    OffsetStack* acquireOffsetStack( const QString& id, quintptr owner );
+    // Rotates a stack to `centidegrees`; with pivotHmd the stack's x/z are
+    // shifted so the headset stays in place.
+    void setOffsetStackRotation( const QString& id,
+                                 int centidegrees,
+                                 bool pivotHmd );
+    // Sets the user rotation; pivotHmd=false turns around the origin.
+    void setRotationWithPivot( int centidegrees, bool pivotHmd );
+    bool removeOffsetStack( const QString& id );
+    void removeOffsetStacksOwnedBy( quintptr owner );
+    void clearOffsetStacks();
+
+    // For the QML "Offset Stacks" page.
+    Q_INVOKABLE QVariantList offsetStackList() const;
+    Q_INVOKABLE QVariantMap totalOffsetMap() const;
+    Q_INVOKABLE void resetOffsetStack( const QString& id );
+    Q_INVOKABLE void resetAllOffsetStacks();
 
     // actions:
     void leftHandSpaceDrag( bool leftHandDragActive );
@@ -350,6 +406,8 @@ public slots:
 
     void shutdown();
     void reset();
+    // The Reset button: like reset() but keeps software offset stacks.
+    void userReset();
     void outputLogPoses();
     void zeroOffsets();
     void sendSeatedRecenter();
@@ -390,6 +448,8 @@ signals:
     void showLogMatricesButtonChanged( bool value );
     void universeCenteredRotationChanged( bool value );
     void offsetProfilesUpdated();
+    // Emitted when stacks are added or removed (not on value changes).
+    void offsetStacksChanged();
 };
 
 } // namespace advsettings

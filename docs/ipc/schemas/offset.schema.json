@@ -29,7 +29,7 @@
     },
     "offset": {
       "type": "object",
-      "description": "Full playspace offset as shown in the Offsets tab.",
+      "description": "A full offset: translation in the playspace's un-rotated base frame plus yaw.",
       "properties": {
         "x": { "$ref": "#/definitions/meters" },
         "y": { "$ref": "#/definitions/meters" },
@@ -41,7 +41,7 @@
     },
     "partialOffset": {
       "type": "object",
-      "description": "Any non-empty subset of offset fields. Applied atomically (all validated first); rotation is applied before x/y/z. Axis locks set in OVRAS still apply.",
+      "description": "Any non-empty subset of offset fields. Applied atomically (all validated first); rotation is applied before x/y/z.",
       "properties": {
         "x": { "$ref": "#/definitions/metersInput" },
         "y": { "$ref": "#/definitions/metersInput" },
@@ -51,9 +51,46 @@
       "minProperties": 1,
       "additionalProperties": false
     },
+    "stackId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+      "description": "Name of an offset stack, chosen by the client (e.g. \"vrcleash\"). Any client may read or write any stack."
+    },
+    "pivot": {
+      "type": "string",
+      "enum": ["hmd", "origin"],
+      "description": "What a rotation write turns around. hmd: the headset stays in place (default, unless Universe-Centered Rotation is enabled in OVRAS, which makes origin the default). origin: the playspace origin; x/z are not adjusted."
+    },
+    "stackEntry": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/definitions/stackId" },
+        "persist": {
+          "type": "boolean",
+          "description": "false: removed when the connection that last wrote it closes. true: kept until reset (or OVRAS restarts)."
+        },
+        "offset": { "$ref": "#/definitions/offset" }
+      },
+      "required": ["id", "persist", "offset"],
+      "additionalProperties": false
+    },
+    "stackList": {
+      "type": "object",
+      "properties": {
+        "max": { "type": "integer", "description": "Maximum number of stacks (currently 32)." },
+        "stacks": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/stackEntry" },
+          "description": "All existing stacks, sorted by id."
+        }
+      },
+      "required": ["max", "stacks"],
+      "additionalProperties": false
+    },
     "offsetPath": {
       "type": "string",
-      "const": "/space/offset"
+      "const": "/space/offset",
+      "description": "The user's own offset, or a stack's offset when the request carries `stack`."
     },
     "offsetFieldPath": {
       "type": "string",
@@ -63,6 +100,25 @@
         "/space/offset/z",
         "/space/offset/rotation"
       ]
+    },
+    "totalPath": {
+      "type": "string",
+      "const": "/space/total",
+      "description": "Read-only: user offset plus all stacks, i.e. what is applied to the playspace."
+    },
+    "totalFieldPath": {
+      "type": "string",
+      "enum": [
+        "/space/total/x",
+        "/space/total/y",
+        "/space/total/z",
+        "/space/total/rotation"
+      ]
+    },
+    "stacksPath": {
+      "type": "string",
+      "const": "/space/stacks",
+      "description": "Read-only: list of all offset stacks."
     }
   }
 }
