@@ -1,0 +1,218 @@
+asyncapi: 3.0.0
+info:
+  title: OpenVR Advanced Settings IPC
+  version: 1.0.0
+  description: |
+    Local IPC for reading and writing OpenVR Advanced Settings (OVRAS) state
+    from other programs. Version 1 exposes the playspace offset (the values
+    produced by Space Drag / Space Turn and shown in the Offsets tab).
+
+    * Transport: a single WebSocket connection; every frame is a UTF-8 JSON text frame.
+    * Addresses are OSC-style paths (`/space/offset/x`) so an OSC transport can
+      map onto the same operations later.
+    * Units: meters for x/y/z, degrees for rotation.
+    * Rotation pivot: unless "universe centered rotation" is enabled in OVRAS,
+      changing `rotation` rotates the playspace around the headset (same as the UI).
+    * Replies are sent in request order, exactly one per request. `id` is optional;
+      when present (integer) it is echoed back.
+    * Security: the server binds to 127.0.0.1 only, is disabled by default, and
+      rejects handshakes that carry an `Origin` header (i.e. browser pages).
+
+    The protocol major version equals `info.version` major and is reported by `hello`.
+  license:
+    name: GPL-3.0
+servers:
+  local:
+    host: '127.0.0.1:{port}'
+    protocol: ws
+    description: Enabled from the OVRAS Settings tab ("IPC server").
+    variables:
+      port:
+        default: '8998'
+        description: Configurable in the OVRAS Settings tab.
+
+channels:
+  root:
+    address: /
+    title: IPC connection
+    description: The single WebSocket connection; all messages share it.
+    servers:
+      - $ref: '#/servers/local'
+    messages:
+      helloRequest: { $ref: '#/components/messages/helloRequest' }
+      helloResponse: { $ref: '#/components/messages/helloResponse' }
+      getRequest: { $ref: '#/components/messages/getRequest' }
+      setRequest: { $ref: '#/components/messages/setRequest' }
+      addRequest: { $ref: '#/components/messages/addRequest' }
+      subscribeRequest: { $ref: '#/components/messages/subscribeRequest' }
+      unsubscribeRequest: { $ref: '#/components/messages/unsubscribeRequest' }
+      offsetResponse: { $ref: '#/components/messages/offsetResponse' }
+      numberResponse: { $ref: '#/components/messages/numberResponse' }
+      nullResponse: { $ref: '#/components/messages/nullResponse' }
+      errorResponse: { $ref: '#/components/messages/errorResponse' }
+      offsetChanged: { $ref: '#/components/messages/offsetChanged' }
+
+operations:
+  hello:
+    action: receive
+    channel: { $ref: '#/channels/root' }
+    summary: Handshake; returns server name, protocol version and app version.
+    messages:
+      - $ref: '#/channels/root/messages/helloRequest'
+    reply:
+      channel: { $ref: '#/channels/root' }
+      messages:
+        - $ref: '#/channels/root/messages/helloResponse'
+        - $ref: '#/channels/root/messages/errorResponse'
+
+  getOffset:
+    action: receive
+    channel: { $ref: '#/channels/root' }
+    summary: Read the whole offset (`/space/offset`) or one field (`/space/offset/x`).
+    messages:
+      - $ref: '#/channels/root/messages/getRequest'
+    reply:
+      channel: { $ref: '#/channels/root' }
+      messages:
+        - $ref: '#/channels/root/messages/offsetResponse'
+        - $ref: '#/channels/root/messages/numberResponse'
+        - $ref: '#/channels/root/messages/errorResponse'
+
+  setOffset:
+    action: receive
+    channel: { $ref: '#/channels/root' }
+    summary: Set offsets to absolute values. Replies with the full resulting offset.
+    messages:
+      - $ref: '#/channels/root/messages/setRequest'
+    reply:
+      channel: { $ref: '#/channels/root' }
+      messages:
+        - $ref: '#/channels/root/messages/offsetResponse'
+        - $ref: '#/channels/root/messages/errorResponse'
+
+  addOffset:
+    action: receive
+    channel: { $ref: '#/channels/root' }
+    summary: Add relative deltas to the current offsets. Replies with the full resulting offset.
+    messages:
+      - $ref: '#/channels/root/messages/addRequest'
+    reply:
+      channel: { $ref: '#/channels/root' }
+      messages:
+        - $ref: '#/channels/root/messages/offsetResponse'
+        - $ref: '#/channels/root/messages/errorResponse'
+
+  subscribe:
+    action: receive
+    channel: { $ref: '#/channels/root' }
+    summary: Start receiving `offsetChanged` events. Replies with the current offset as a snapshot.
+    messages:
+      - $ref: '#/channels/root/messages/subscribeRequest'
+    reply:
+      channel: { $ref: '#/channels/root' }
+      messages:
+        - $ref: '#/channels/root/messages/offsetResponse'
+        - $ref: '#/channels/root/messages/errorResponse'
+
+  unsubscribe:
+    action: receive
+    channel: { $ref: '#/channels/root' }
+    summary: Stop receiving `offsetChanged` events.
+    messages:
+      - $ref: '#/channels/root/messages/unsubscribeRequest'
+    reply:
+      channel: { $ref: '#/channels/root' }
+      messages:
+        - $ref: '#/channels/root/messages/nullResponse'
+        - $ref: '#/channels/root/messages/errorResponse'
+
+  offsetChanged:
+    action: send
+    channel: { $ref: '#/channels/root' }
+    summary: |
+      Pushed to subscribers when the offset changes from any source (UI, Space Drag,
+      Space Turn, profiles, other IPC clients). Coalesced to at most one event per
+      ~16 ms window, carrying the latest full state.
+    messages:
+      - $ref: '#/channels/root/messages/offsetChanged'
+
+components:
+  correlationIds:
+    requestId:
+      description: Optional client-chosen integer, echoed in the reply.
+      location: '$message.payload#/id'
+
+  messages:
+    helloRequest:
+      name: helloRequest
+      correlationId: { $ref: '#/components/correlationIds/requestId' }
+      payload: { $ref: './schemas/request.schema.json#/definitions/helloRequest' }
+      examples:
+        - payload: { id: 1, op: hello }
+    helloResponse:
+      name: helloResponse
+      correlationId: { $ref: '#/components/correlationIds/requestId' }
+      payload: { $ref: './schemas/response.schema.json#/definitions/helloResponse' }
+      examples:
+        - payload: { id: 1, ok: true, value: { name: OVRAS, protocol: 1, version: '5.8.11' } }
+    getRequest:
+      name: getRequest
+      correlationId: { $ref: '#/components/correlationIds/requestId' }
+      payload: { $ref: './schemas/request.schema.json#/definitions/getRequest' }
+      examples:
+        - payload: { id: 2, op: get, path: /space/offset }
+        - payload: { id: 3, op: get, path: /space/offset/rotation }
+    setRequest:
+      name: setRequest
+      correlationId: { $ref: '#/components/correlationIds/requestId' }
+      payload: { $ref: './schemas/request.schema.json#/definitions/setRequest' }
+      examples:
+        - payload: { id: 4, op: set, path: /space/offset, value: { x: 0.5, rotation: 90 } }
+        - payload: { id: 5, op: set, path: /space/offset/y, value: 0 }
+    addRequest:
+      name: addRequest
+      correlationId: { $ref: '#/components/correlationIds/requestId' }
+      payload: { $ref: './schemas/request.schema.json#/definitions/addRequest' }
+      examples:
+        - payload: { id: 6, op: add, path: /space/offset, value: { y: 0.1 } }
+    subscribeRequest:
+      name: subscribeRequest
+      correlationId: { $ref: '#/components/correlationIds/requestId' }
+      payload: { $ref: './schemas/request.schema.json#/definitions/subscribeRequest' }
+      examples:
+        - payload: { id: 7, op: subscribe, path: /space/offset }
+    unsubscribeRequest:
+      name: unsubscribeRequest
+      correlationId: { $ref: '#/components/correlationIds/requestId' }
+      payload: { $ref: './schemas/request.schema.json#/definitions/unsubscribeRequest' }
+      examples:
+        - payload: { id: 8, op: unsubscribe, path: /space/offset }
+    offsetResponse:
+      name: offsetResponse
+      correlationId: { $ref: '#/components/correlationIds/requestId' }
+      payload: { $ref: './schemas/response.schema.json#/definitions/offsetResponse' }
+      examples:
+        - payload: { id: 2, ok: true, value: { x: 0.5, y: 0.1, z: 0, rotation: 90 } }
+    numberResponse:
+      name: numberResponse
+      correlationId: { $ref: '#/components/correlationIds/requestId' }
+      payload: { $ref: './schemas/response.schema.json#/definitions/numberResponse' }
+      examples:
+        - payload: { id: 3, ok: true, value: 90 }
+    nullResponse:
+      name: nullResponse
+      correlationId: { $ref: '#/components/correlationIds/requestId' }
+      payload: { $ref: './schemas/response.schema.json#/definitions/nullResponse' }
+      examples:
+        - payload: { id: 8, ok: true, value: null }
+    errorResponse:
+      name: errorResponse
+      correlationId: { $ref: '#/components/correlationIds/requestId' }
+      payload: { $ref: './schemas/response.schema.json#/definitions/errorResponse' }
+      examples:
+        - payload: { id: 9, ok: false, error: { code: bad_path, message: 'unknown path: /space/nope' } }
+    offsetChanged:
+      name: offsetChanged
+      payload: { $ref: './schemas/event.schema.json' }
+      examples:
+        - payload: { event: changed, path: /space/offset, value: { x: 0.52, y: 0.1, z: 0, rotation: 90 } }

@@ -363,6 +363,10 @@ void OverlayController::exitApp()
 
     settings::saveAllSettings();
 
+    if ( m_ipcServer )
+    {
+        m_ipcServer->stop();
+    }
     m_moveCenterTabController.shutdown();
     // Un-mute mic before Exiting VR, as it is set at system level Not
     // Vr level.
@@ -517,6 +521,18 @@ void OverlayController::SetWidget( QQuickItem* quickItem,
     m_moveCenterTabController.initStage2( this );
     m_rotationTabController.initStage2( this );
     m_videoTabController.initStage2();
+
+    m_ipcServer = std::make_unique<IpcServer>(
+        m_moveCenterTabController,
+        QString( application_strings::applicationVersionString ) );
+    connect( m_ipcServer.get(),
+             &IpcServer::statusChanged,
+             this,
+             &OverlayController::ipcStatusChanged );
+    if ( ipcEnabled() )
+    {
+        m_ipcServer->start( static_cast<quint16>( ipcPort() ) );
+    }
 
     if ( autoApplyChaperoneEnabled() )
     {
@@ -1660,6 +1676,77 @@ bool OverlayController::desktopModeToggle() const
 {
     return settings::getSetting(
         settings::BoolSetting::APPLICATION_desktopModeToggle );
+}
+
+bool OverlayController::ipcEnabled() const
+{
+    return settings::getSetting( settings::BoolSetting::APPLICATION_ipcEnabled );
+}
+
+void OverlayController::setIpcEnabled( bool value, bool notify )
+{
+    settings::setSetting( settings::BoolSetting::APPLICATION_ipcEnabled,
+                          value );
+    settings::saveAllSettings();
+    if ( m_ipcServer )
+    {
+        if ( value )
+        {
+            m_ipcServer->start( static_cast<quint16>( ipcPort() ) );
+        }
+        else
+        {
+            m_ipcServer->stop();
+        }
+    }
+    if ( notify )
+    {
+        emit ipcEnabledChanged( value );
+    }
+}
+
+int OverlayController::ipcPort() const
+{
+    return settings::getSetting( settings::IntSetting::APPLICATION_ipcPort );
+}
+
+void OverlayController::setIpcPort( int value, bool notify )
+{
+    // Unprivileged range only; anything else keeps the previous port.
+    if ( value < 1024 || value > 65535 )
+    {
+        LOG( WARNING ) << "IPC: ignoring invalid port " << value;
+        if ( notify )
+        {
+            emit ipcPortChanged( ipcPort() );
+        }
+        return;
+    }
+    const bool changed = value != ipcPort();
+    settings::setSetting( settings::IntSetting::APPLICATION_ipcPort, value );
+    settings::saveAllSettings();
+    if ( changed && m_ipcServer && ipcEnabled() )
+    {
+        m_ipcServer->start( static_cast<quint16>( value ) );
+    }
+    if ( notify )
+    {
+        emit ipcPortChanged( value );
+    }
+}
+
+QString OverlayController::ipcStatus() const
+{
+    if ( !m_ipcServer )
+    {
+        return "Not started";
+    }
+    if ( m_ipcServer->isListening() )
+    {
+        return QString( "Listening on 127.0.0.1:%1" ).arg( ipcPort() );
+    }
+    const auto error = m_ipcServer->lastError();
+    return error.isEmpty() ? QString( "Off" ) : error;
 }
 
 void OverlayController::playActivationSound()

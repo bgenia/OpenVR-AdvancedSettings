@@ -334,6 +334,10 @@ private:
                           SettingCategory::Application,
                           QtInfo{ "desktopModeToggle" },
                           false },
+        BoolSettingValue{ BoolSetting::APPLICATION_ipcEnabled,
+                          SettingCategory::Application,
+                          QtInfo{ "ipcEnabled" },
+                          false },
 
         BoolSettingValue{ BoolSetting::AUDIO_pttEnabled,
                           SettingCategory::Audio,
@@ -613,6 +617,10 @@ private:
                          SettingCategory::Application,
                          QtInfo{ "customTickRateMs" },
                          20 },
+        IntSettingValue{ IntSetting::APPLICATION_ipcPort,
+                         SettingCategory::Application,
+                         QtInfo{ "ipcPort" },
+                         8998 },
 
         IntSettingValue{ IntSetting::UTILITY_alarmHour,
                          SettingCategory::Utility,

@@ -1,0 +1,110 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "request.schema.json",
+  "title": "Client request",
+  "description": "Any message a client sends. Discriminated by `op`.",
+  "oneOf": [
+    { "$ref": "#/definitions/helloRequest" },
+    { "$ref": "#/definitions/getRequest" },
+    { "$ref": "#/definitions/setRequest" },
+    { "$ref": "#/definitions/addRequest" },
+    { "$ref": "#/definitions/subscribeRequest" },
+    { "$ref": "#/definitions/unsubscribeRequest" }
+  ],
+  "definitions": {
+    "id": {
+      "type": "integer",
+      "description": "Optional client-chosen correlation id, echoed in the reply."
+    },
+    "helloRequest": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/definitions/id" },
+        "op": { "const": "hello" }
+      },
+      "required": ["op"],
+      "additionalProperties": false
+    },
+    "getRequest": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/definitions/id" },
+        "op": { "const": "get" },
+        "path": {
+          "anyOf": [
+            { "$ref": "offset.schema.json#/definitions/offsetPath" },
+            { "$ref": "offset.schema.json#/definitions/offsetFieldPath" }
+          ]
+        }
+      },
+      "required": ["op", "path"],
+      "additionalProperties": false
+    },
+    "writeRequest": {
+      "description": "Shared shape of set/add. Whole-object path takes a partial offset; field path takes a number.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": { "$ref": "#/definitions/id" },
+            "op": { "type": "string" },
+            "path": { "$ref": "offset.schema.json#/definitions/offsetPath" },
+            "value": { "$ref": "offset.schema.json#/definitions/partialOffset" }
+          },
+          "required": ["op", "path", "value"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": { "$ref": "#/definitions/id" },
+            "op": { "type": "string" },
+            "path": { "$ref": "offset.schema.json#/definitions/offsetFieldPath" },
+            "value": {
+              "type": "number",
+              "minimum": -1000000,
+              "maximum": 1000000,
+              "description": "Meters for x/y/z (limited to ±10000), degrees for rotation (±1000000)."
+            }
+          },
+          "required": ["op", "path", "value"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "setRequest": {
+      "description": "Set offsets to absolute values.",
+      "allOf": [
+        { "$ref": "#/definitions/writeRequest" },
+        { "properties": { "op": { "const": "set" } } }
+      ]
+    },
+    "addRequest": {
+      "description": "Add relative deltas to the current offsets.",
+      "allOf": [
+        { "$ref": "#/definitions/writeRequest" },
+        { "properties": { "op": { "const": "add" } } }
+      ]
+    },
+    "subscribeRequest": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/definitions/id" },
+        "op": { "const": "subscribe" },
+        "path": { "$ref": "offset.schema.json#/definitions/offsetPath" }
+      },
+      "required": ["op", "path"],
+      "additionalProperties": false
+    },
+    "unsubscribeRequest": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/definitions/id" },
+        "op": { "const": "unsubscribe" },
+        "path": { "$ref": "offset.schema.json#/definitions/offsetPath" }
+      },
+      "required": ["op", "path"],
+      "additionalProperties": false
+    }
+  }
+}

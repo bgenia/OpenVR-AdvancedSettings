@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "offset.schema.json",
+  "title": "Playspace offset",
+  "definitions": {
+    "meters": {
+      "type": "number",
+      "description": "Distance in meters. Must be finite."
+    },
+    "degrees": {
+      "type": "number",
+      "description": "Rotation in degrees. Internally stored with 0.01 degree precision."
+    },
+    "metersInput": {
+      "type": "number",
+      "minimum": -10000,
+      "maximum": 10000,
+      "description": "Meters accepted in writes. Out of range → bad_value."
+    },
+    "degreesInput": {
+      "type": "number",
+      "minimum": -1000000,
+      "maximum": 1000000,
+      "description": "Degrees accepted in writes. Out of range → bad_value."
+    },
+    "field": {
+      "type": "string",
+      "enum": ["x", "y", "z", "rotation"]
+    },
+    "offset": {
+      "type": "object",
+      "description": "Full playspace offset as shown in the Offsets tab.",
+      "properties": {
+        "x": { "$ref": "#/definitions/meters" },
+        "y": { "$ref": "#/definitions/meters" },
+        "z": { "$ref": "#/definitions/meters" },
+        "rotation": { "$ref": "#/definitions/degrees" }
+      },
+      "required": ["x", "y", "z", "rotation"],
+      "additionalProperties": false
+    },
+    "partialOffset": {
+      "type": "object",
+      "description": "Any non-empty subset of offset fields. Applied atomically (all validated first); rotation is applied before x/y/z. Axis locks set in OVRAS still apply.",
+      "properties": {
+        "x": { "$ref": "#/definitions/metersInput" },
+        "y": { "$ref": "#/definitions/metersInput" },
+        "z": { "$ref": "#/definitions/metersInput" },
+        "rotation": { "$ref": "#/definitions/degreesInput" }
+      },
+      "minProperties": 1,
+      "additionalProperties": false
+    },
+    "offsetPath": {
+      "type": "string",
+      "const": "/space/offset"
+    },
+    "offsetFieldPath": {
+      "type": "string",
+      "enum": [
+        "/space/offset/x",
+        "/space/offset/y",
+        "/space/offset/z",
+        "/space/offset/rotation"
+      ]
+    }
+  }
+}

@@ -100,6 +100,49 @@ MyStackViewPage {
                 }
             }
 
+            RowLayout {
+                MyToggleButton {
+                    id: ipcEnabledToggle
+                    text: "IPC Server (localhost WebSocket)"
+                    onCheckedChanged: {
+                        if (OverlayController.ipcEnabled !== checked) {
+                            OverlayController.setIpcEnabled(checked, false)
+                        }
+                    }
+                }
+
+                MyText {
+                    text: "Port: "
+                    horizontalAlignment: Text.AlignRight
+                    Layout.leftMargin: 20
+                    Layout.rightMargin: 2
+                }
+
+                MyTextField {
+                    id: ipcPortText
+                    text: "8998"
+                    keyBoardUID: 504
+                    Layout.preferredWidth: 140
+                    Layout.leftMargin: 10
+                    horizontalAlignment: Text.AlignHCenter
+                    function onInputEvent(input) {
+                        var val = parseInt(input, 10)
+                        if (!isNaN(val)) {
+                            OverlayController.ipcPort = val
+                        }
+                        text = OverlayController.ipcPort
+                    }
+                }
+
+                MyText {
+                    id: ipcStatusText
+                    text: OverlayController.ipcStatus
+                    Layout.leftMargin: 20
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                }
+            }
+
             MyToggleButton {
                 id: universeCenteredRotationToggle
                 text: "Universe-Centered Rotation (Disables HMD Centering)"
@@ -330,6 +373,8 @@ MyStackViewPage {
                 exclusiveInputToggleButton.checked = OverlayController.exclusiveInputEnabled
                 autoApplyChaperoneToggleButton.checked = OverlayController.autoApplyChaperoneEnabled
                 desktopModeToggleButton.checked = OverlayController.desktopModeToggle
+                ipcEnabledToggle.checked = OverlayController.ipcEnabled
+                ipcPortText.text = OverlayController.ipcPort
 
 
                 reloadChaperoneProfiles()
@@ -393,6 +438,12 @@ MyStackViewPage {
             }
             onDesktopModeToggleChanged:{
                 desktopModeToggleButton.checked = OverlayController.desktopModeToggle
+            }
+            onIpcEnabledChanged: {
+                ipcEnabledToggle.checked = OverlayController.ipcEnabled
+            }
+            onIpcPortChanged: {
+                ipcPortText.text = OverlayController.ipcPort
             }
         }
         Connections{

@@ -38,6 +38,7 @@
 #include "tabcontrollers/UtilitiesTabController.h"
 #include "tabcontrollers/VideoTabController.h"
 #include "tabcontrollers/RotationTabController.h"
+#include "ipc/IpcServer.h"
 
 #include "openvr/ivrinput.h"
 
@@ -99,6 +100,11 @@ class OverlayController : public QObject
                     soundVolumeChanged )
     Q_PROPERTY( bool desktopModeToggle READ desktopModeToggle WRITE
                     setDesktopModeToggle NOTIFY desktopModeToggleChanged )
+    Q_PROPERTY( bool ipcEnabled READ ipcEnabled WRITE setIpcEnabled NOTIFY
+                    ipcEnabledChanged )
+    Q_PROPERTY(
+        int ipcPort READ ipcPort WRITE setIpcPort NOTIFY ipcPortChanged )
+    Q_PROPERTY( QString ipcStatus READ ipcStatus NOTIFY ipcStatusChanged )
 
 private:
     vr::VROverlayHandle_t m_ulOverlayHandle = vr::k_ulOverlayHandleInvalid;
@@ -166,6 +172,7 @@ public: // I know it's an ugly hack to make them public to enable external
     UtilitiesTabController m_utilitiesTabController;
     VideoTabController m_videoTabController;
     RotationTabController m_rotationTabController;
+    std::unique_ptr<IpcServer> m_ipcServer;
     bool m_incomingReset = false;
 
 private:
@@ -250,6 +257,9 @@ public:
 
     double soundVolume() const;
     bool desktopModeToggle() const;
+    bool ipcEnabled() const;
+    int ipcPort() const;
+    QString ipcStatus() const;
 
 public slots:
     void renderOverlay();
@@ -278,6 +288,8 @@ public slots:
     void setAutoApplyChaperoneEnabled( bool value, bool notify = true );
     void setSoundVolume( double value, bool notify = true );
     void setDesktopModeToggle( bool value, bool notify = true );
+    void setIpcEnabled( bool value, bool notify = true );
+    void setIpcPort( int value, bool notify = true );
 
 signals:
     void keyBoardInputSignal( QString input, unsigned long userValue = 0 );
@@ -293,6 +305,9 @@ signals:
     void autoApplyChaperoneEnabledChanged( bool value );
     void soundVolumeChanged( double value );
     void desktopModeToggleChanged( bool value );
+    void ipcEnabledChanged( bool value );
+    void ipcPortChanged( int value );
+    void ipcStatusChanged();
     void submitLastTextField(unsigned long value = 0);
 };
 

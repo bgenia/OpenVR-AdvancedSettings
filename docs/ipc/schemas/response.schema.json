@@ -1,0 +1,82 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "response.schema.json",
+  "title": "Server reply",
+  "description": "Exactly one reply is sent per request, in request order. `id` is present iff the request carried a valid integer id.",
+  "oneOf": [
+    { "$ref": "#/definitions/okResponse" },
+    { "$ref": "#/definitions/errorResponse" }
+  ],
+  "definitions": {
+    "id": { "type": "integer" },
+    "okResponse": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/definitions/id" },
+        "ok": { "const": true },
+        "value": {
+          "description": "hello → helloValue; get on /space/offset, set, add, subscribe → offset; get on a field path → number; unsubscribe → null."
+        }
+      },
+      "required": ["ok", "value"],
+      "additionalProperties": false
+    },
+    "helloValue": {
+      "type": "object",
+      "properties": {
+        "name": { "const": "OVRAS" },
+        "protocol": { "const": 1 },
+        "version": { "type": "string", "description": "OVRAS application version string." }
+      },
+      "required": ["name", "protocol", "version"],
+      "additionalProperties": false
+    },
+    "helloResponse": {
+      "allOf": [
+        { "$ref": "#/definitions/okResponse" },
+        { "properties": { "value": { "$ref": "#/definitions/helloValue" } } }
+      ]
+    },
+    "offsetResponse": {
+      "allOf": [
+        { "$ref": "#/definitions/okResponse" },
+        { "properties": { "value": { "$ref": "offset.schema.json#/definitions/offset" } } }
+      ]
+    },
+    "numberResponse": {
+      "allOf": [
+        { "$ref": "#/definitions/okResponse" },
+        { "properties": { "value": { "type": "number" } } }
+      ]
+    },
+    "nullResponse": {
+      "allOf": [
+        { "$ref": "#/definitions/okResponse" },
+        { "properties": { "value": { "type": "null" } } }
+      ]
+    },
+    "errorCode": {
+      "type": "string",
+      "enum": ["bad_json", "bad_op", "bad_path", "bad_value", "internal"],
+      "description": "bad_json: not a JSON object. bad_op: missing/unknown op. bad_path: missing/unknown path for this op. bad_value: value missing, wrong type, non-finite, or has unknown fields. internal: server-side failure."
+    },
+    "errorResponse": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/definitions/id" },
+        "ok": { "const": false },
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": { "$ref": "#/definitions/errorCode" },
+            "message": { "type": "string" }
+          },
+          "required": ["code", "message"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["ok", "error"],
+      "additionalProperties": false
+    }
+  }
+}

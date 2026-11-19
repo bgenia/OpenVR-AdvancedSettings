@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "event.schema.json",
+  "title": "Server push event",
+  "description": "Sent only to clients subscribed to `path`. Coalesced: at most one per ~16 ms window, carrying the latest full state.",
+  "type": "object",
+  "properties": {
+    "event": { "const": "changed" },
+    "path": { "$ref": "offset.schema.json#/definitions/offsetPath" },
+    "value": { "$ref": "offset.schema.json#/definitions/offset" }
+  },
+  "required": ["event", "path", "value"],
+  "additionalProperties": false
+}

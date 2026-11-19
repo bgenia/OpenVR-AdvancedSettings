@@ -37,6 +37,7 @@ enum class BoolSetting
     APPLICATION_openXRWorkAround,
     APPLICATION_autoApplyChaperone,
     APPLICATION_desktopModeToggle,
+    APPLICATION_ipcEnabled,
 
     AUDIO_pttEnabled,
     AUDIO_pttShowNotification,
@@ -127,6 +128,7 @@ enum class IntSetting
 
     APPLICATION_debugState,
     APPLICATION_customTickRateMs,
+    APPLICATION_ipcPort,
 
     UTILITY_alarmHour,
     UTILITY_alarmMinute,

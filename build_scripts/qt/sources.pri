@@ -4,6 +4,8 @@ SOURCES += src/main.cpp\
     src/tabcontrollers/ChaperoneTabController.cpp \
     src/tabcontrollers/FixFloorTabController.cpp \
     src/tabcontrollers/MoveCenterTabController.cpp \
+    src/ipc/IpcProtocol.cpp \
+    src/ipc/IpcServer.cpp \
     src/tabcontrollers/SettingsTabController.cpp \
     src/tabcontrollers/StatisticsTabController.cpp \
     src/tabcontrollers/SteamVRTabController.cpp \
@@ -35,6 +37,8 @@ HEADERS += src/overlaycontroller.h \
     src/tabcontrollers/ChaperoneTabController.h \
     src/tabcontrollers/FixFloorTabController.h \
     src/tabcontrollers/MoveCenterTabController.h \
+    src/ipc/IpcProtocol.h \
+    src/ipc/IpcServer.h \
     src/tabcontrollers/SettingsTabController.h \
     src/tabcontrollers/StatisticsTabController.h \
     src/tabcontrollers/SteamVRTabController.h \
