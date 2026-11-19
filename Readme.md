@@ -1,3 +1,10 @@
+> [!IMPORTANT]
+> **This is an unofficial, agentic, IPC-focused fork of [OpenVR Advanced Settings](https://github.com/OpenVR-Advanced-Settings/OpenVR-AdvancedSettings).**
+>
+> - **IPC-focused:** the goal of this fork is to let other software read and drive OVRAS. It adds a local WebSocket API (`ws://127.0.0.1:8998`, off by default, enabled in Settings → IPC Server) for the playspace offset, and **offset stacks** so tools such as leashes or grab/throw avatar tools can move the user without fighting their Space Drag. See **[docs/ipc/README.md](docs/ipc/README.md)** and the AsyncAPI spec in [docs/ipc/asyncapi.yaml](docs/ipc/asyncapi.yaml).
+> - **Agentic:** changes in this fork are developed largely by an AI coding agent (Claude Code) under the maintainer's direction and review, with spec-first design and automated conformance tests (`test/ipc/`).
+> - **Not affiliated with upstream:** please report problems with fork features here, not to the upstream project. Everything below this notice is the upstream README and describes upstream OVRAS.
+
 ![language](https://img.shields.io/badge/Language-C%2B%2B17%2C%20QML-green.svg) 
 ![dependencies](https://img.shields.io/badge/Dependencies-OpenVR%2C%20Qt5%2C%20Python3-green.svg)
 ![license_gpl3](https://img.shields.io/badge/License-GPL%203.0-green.svg) 
