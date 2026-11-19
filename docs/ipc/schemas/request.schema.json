@@ -67,15 +67,22 @@
       ]
     },
     "writeCommon": {
-      "description": "Optional fields shared by set/add. `persist` is only allowed together with `stack`; when omitted, an existing stack keeps its setting and a new one is non-persistent.",
+      "description": "Optional fields shared by set/add. `persist`, `gravity` and `floor` are only allowed together with `stack`; when omitted, an existing stack keeps its setting and a new one gets the default (persist false, gravity false, floor 0). `frame` is only allowed on `add` (checked by the server: bad_value).",
       "properties": {
         "id": { "$ref": "#/definitions/id" },
         "op": { "type": "string" },
         "stack": { "$ref": "#/definitions/stack" },
         "persist": { "type": "boolean" },
-        "pivot": { "$ref": "offset.schema.json#/definitions/pivot" }
+        "gravity": { "type": "boolean" },
+        "floor": { "$ref": "offset.schema.json#/definitions/metersInput" },
+        "pivot": { "$ref": "offset.schema.json#/definitions/pivot" },
+        "frame": { "$ref": "offset.schema.json#/definitions/frame" }
       },
-      "dependencies": { "persist": ["stack"] }
+      "dependencies": {
+        "persist": ["stack"],
+        "gravity": ["stack"],
+        "floor": ["stack"]
+      }
     },
     "writeRequest": {
       "description": "Shared shape of set/add. Whole-object path takes a partial offset; field path takes a number. With `stack` the write targets that stack (created on first write), otherwise the user's offset.",
@@ -86,7 +93,7 @@
             {
               "type": "object",
               "properties": {
-                "id": true, "op": true, "stack": true, "persist": true, "pivot": true,
+                "id": true, "op": true, "stack": true, "persist": true, "gravity": true, "floor": true, "pivot": true, "frame": true,
                 "path": { "$ref": "offset.schema.json#/definitions/offsetPath" },
                 "value": { "$ref": "offset.schema.json#/definitions/partialOffset" }
               },
@@ -96,7 +103,7 @@
             {
               "type": "object",
               "properties": {
-                "id": true, "op": true, "stack": true, "persist": true, "pivot": true,
+                "id": true, "op": true, "stack": true, "persist": true, "gravity": true, "floor": true, "pivot": true, "frame": true,
                 "path": { "$ref": "offset.schema.json#/definitions/offsetFieldPath" },
                 "value": {
                   "type": "number",

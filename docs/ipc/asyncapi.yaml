@@ -1,7 +1,7 @@
 asyncapi: 3.0.0
 info:
   title: OpenVR Advanced Settings IPC
-  version: 1.1.0
+  version: 1.2.0
   description: |
     Local IPC for reading and writing OpenVR Advanced Settings (OVRAS) state
     from other programs. Version 1 exposes the playspace offset (the values
@@ -19,6 +19,23 @@ info:
     request, the OVRAS UI, OVRAS's out-of-bounds safety reset, or — for
     non-persistent stacks — when the connection that last wrote them closes.
     At most 32 stacks exist at once. Axis locks only limit the user offset.
+
+    **Sign convention.** Offsets move the *world* relative to the user, like the
+    OVRAS Offsets tab: +x moves the user toward -x, and a **negative y lifts the
+    user up**.
+
+    **Stack gravity (1.2, feature "stackGravity").** A stack written with
+    `"gravity": true` falls: OVRAS increases its y (lowering the user) at the OVRAS
+    gravity strength until it reaches the stack's `floor` (default 0, the height
+    before the stack lifted the user), then stops. Only stacks with gravity on are
+    affected; the user's own gravity setting is independent. Any write to a stack
+    resets its fall speed. Turn gravity off while your tool controls the height
+    (e.g. while carrying) and on to drop. Stack gravity also runs while the
+    dashboard is open.
+
+    **HMD frame (1.2, feature "hmdFrame").** `add` accepts `"frame": "hmd"`: x/y/z
+    are then relative to the headset's current heading (x right, y up, z backwards)
+    and converted by OVRAS.
 
     * Transport: a single WebSocket connection; every frame is a UTF-8 JSON text frame.
     * Addresses are OSC-style paths (`/space/offset/x`) so an OSC transport can
@@ -192,7 +209,7 @@ components:
       correlationId: { $ref: '#/components/correlationIds/requestId' }
       payload: { $ref: './schemas/response.schema.json#/definitions/helloResponse' }
       examples:
-        - payload: { id: 1, ok: true, value: { name: OVRAS, protocol: 1, version: '5.8.11', features: [stacks] } }
+        - payload: { id: 1, ok: true, value: { name: OVRAS, protocol: 1, version: '5.8.11', features: [stacks, stackGravity, hmdFrame] } }
     getRequest:
       name: getRequest
       correlationId: { $ref: '#/components/correlationIds/requestId' }
@@ -219,6 +236,8 @@ components:
       examples:
         - payload: { id: 6, op: add, path: /space/offset, value: { y: 0.1 } }
         - payload: { id: 15, op: add, path: /space/offset, value: { x: 0.01, z: -0.02 }, stack: vrcleash }
+        - payload: { id: 20, op: add, path: /space/offset, value: { x: 0.02, y: -0.01, z: 0 }, stack: carry, frame: hmd, gravity: false }
+        - payload: { id: 21, op: add, path: /space/offset/y, value: 0, stack: carry, gravity: true, floor: 0 }
     resetRequest:
       name: resetRequest
       correlationId: { $ref: '#/components/correlationIds/requestId' }
@@ -256,7 +275,7 @@ components:
             value:
               max: 32
               stacks:
-                - { id: vrcleash, persist: false, offset: { x: 0.01, y: 1, z: -0.02, rotation: 0 } }
+                - { id: vrcleash, persist: false, gravity: false, floor: 0, offset: { x: 0.01, y: -1, z: -0.02, rotation: 0 } }
     numberResponse:
       name: numberResponse
       correlationId: { $ref: '#/components/correlationIds/requestId' }
@@ -285,4 +304,4 @@ components:
         - payload:
             event: changed
             path: /space/stacks
-            value: { max: 32, stacks: [ { id: vrcleash, persist: false, offset: { x: 0.01, y: 1, z: -0.02, rotation: 0 } } ] }
+            value: { max: 32, stacks: [ { id: vrcleash, persist: false, gravity: false, floor: 0, offset: { x: 0.01, y: -1, z: -0.02, rotation: 0 } } ] }

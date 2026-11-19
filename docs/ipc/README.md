@@ -1,4 +1,4 @@
-# OVRAS IPC (protocol v1, spec 1.1)
+# OVRAS IPC (protocol v1, spec 1.2)
 
 Other programs can read and change the **playspace offset** (the position and rotation that Space Drag and Space Turn produce, shown in the Offsets tab) while OpenVR Advanced Settings is running. Tools that move the user (leashes, grab/throw) should use **[offset stacks](#offset-stacks)**, so they don't fight the user's own Space Drag.
 
@@ -28,10 +28,10 @@ with connect("ws://127.0.0.1:8998/") as ws:
 
 | op | path | value | reply `value` |
 |---|---|---|---|
-| `hello` | – | – | `{name:"OVRAS", protocol:1, version, features:["stacks"]}` |
+| `hello` | – | – | `{name:"OVRAS", protocol:1, version, features:["stacks","stackGravity","hmdFrame"]}` |
 | `get` | `/space/offset[/x\|y\|z\|rotation]` (optional `stack`), `/space/total[/field]`, `/space/stacks` | – | full offset, a single number, or the stack list |
-| `set` | `/space/offset` or `/space/offset/{field}` (optional `stack`, `persist`, `pivot`) | object with any of `x,y,z,rotation` (whole path) or a number (field path) | full offset of the target after the change |
-| `add` | same | same, but relative | full offset of the target after the change |
+| `set` | `/space/offset` or `/space/offset/{field}` (optional `stack`, `persist`, `gravity`, `floor`, `pivot`) | object with any of `x,y,z,rotation` (whole path) or a number (field path) | full offset of the target after the change |
+| `add` | same, plus optional `frame` | same, but relative | full offset of the target after the change |
 | `reset` | `/space/offset` (optional `stack`) | – | `null` |
 | `subscribe` / `unsubscribe` | `/space/offset`, `/space/total` or `/space/stacks` | – | snapshot / `null` |
 
@@ -44,7 +44,7 @@ with connect("ws://127.0.0.1:8998/") as ws:
 If your tool writes the user's own offset, it fights the user: their Space Drag and your writes change the same numbers, and the user's Reset undoes your work. Instead, give your tool its own **stack** by adding `"stack": "<name>"` to a request:
 
 ```jsonc
-{"op":"set","path":"/space/offset/y","value":1.0,"stack":"vrcleash"}
+{"op":"set","path":"/space/offset/y","value":-1.0,"stack":"vrcleash"}
 ```
 
 OVRAS places the playspace at:
@@ -74,43 +74,60 @@ Translations and rotations are simply added together, so the order of stacks doe
 
 - **Axis locks** in the Offsets tab only limit the user's own offset. Stacks can move on any axis.
 - **Rotation pivot:** add `"pivot": "hmd"` to turn around the headset (the stack's `x`/`z` are adjusted so the headset stays put) or `"pivot": "origin"` to turn around the playspace origin (only the rotation changes). Without `pivot`, the rotation follows the user's *Universe-Centered Rotation* setting: headset when it's off, origin when it's on. `pivot` works the same on the user offset.
+- **Gravity:** send `"gravity": true` to let a stack fall. OVRAS then raises the stack's `y` (remember: positive `y` = lower) at the gravity strength from the OVRAS Motion settings (9.8 m/s² by default) until it reaches the stack's **floor**, lands exactly on it and stops. `"floor"` defaults to `0`, the height the user was at before the stack lifted them. OVRAS can't see the VRChat world, so it never finds real ground by itself. Gravity only pulls down: a stack already at or below its floor stays put.
+  - It only affects stacks that turn it on. The user's own offset and the OVRAS gravity toggle are separate.
+  - Any write to a stack resets its fall speed, so every drop starts from rest.
+  - Turn it **off while your tool controls the height** (while carrying) and **on to drop**. Leaving `gravity`/`floor` out keeps the current values; new stacks start with gravity off and floor 0.
+  - It runs every OVRAS frame, also while the dashboard is open.
+- **Head-relative moves:** `add` accepts `"frame": "hmd"`. The `x`/`y`/`z` you send are then relative to the headset's current heading (yaw only): `x` = to the headset's right, `y` = up, `z` = backwards. OVRAS turns them into playspace offsets. The sign convention stays the same (you move the world), so to move the user forward, send `z` = `+d`. `frame` only works with `add`; `"frame": "base"` is the default.
 - **Interaction with Space Drag:** OVRAS works out the user's drag and turn from the total, so your tool moving a stack is not read as hand movement, and the user can keep dragging while being moved.
 
-**UI:** Space Offsets → **Offset Stacks (N)** lists every stack with its values and lifetime, and has a Reset button per stack plus *Reset All Stacks*.
+**UI:** Space Offsets → **Offset Stacks (N)** lists every stack with its values, lifetime and gravity state (Off / On / Falling), and has a Reset button per stack plus *Reset All Stacks*.
 
-### Example: grab and throw
+### Example: carry and drop
 
 ```python
 import json, time
 from websockets.sync.client import connect
 
-STACK = "mytool.grab"
+STACK = "mytool.carry"
 
 with connect("ws://127.0.0.1:8998/") as ws:
     def call(req):
         ws.send(json.dumps(req))
         return json.loads(ws.recv())
 
-    assert "stacks" in call({"op": "hello"})["value"]["features"]
+    features = call({"op": "hello"})["value"]["features"]
+    assert {"stacks", "stackGravity", "hmdFrame"} <= set(features)
 
-    # While the avatar is held: follow the grabbing hand (deltas you compute).
-    for dx, dy, dz in [(0.01, 0.02, 0.0)] * 50:
+    # Picked up: gravity off while we control the height.
+    call({"op": "add", "path": "/space/offset/y", "value": 0,
+          "stack": STACK, "gravity": False})
+
+    # Carried: each frame, move toward the grabbing hand. Here: 1 m up and
+    # 0.5 m forward over half a second, relative to where the user is facing.
+    # Remember the convention: you move the world, so "user up" is y < 0
+    # and "user forward" is z > 0 in the hmd frame.
+    for _ in range(45):
         call({"op": "add", "path": "/space/offset", "stack": STACK,
-              "value": {"x": dx, "y": dy, "z": dz}})
+              "frame": "hmd", "value": {"x": 0, "y": -1 / 45, "z": 0.5 / 45}})
         time.sleep(1 / 90)
 
-    # Spin the user 90° around their own head.
-    call({"op": "add", "path": "/space/offset/rotation", "stack": STACK,
-          "value": 90, "pivot": "hmd"})
+    # Dropped: OVRAS lets the user fall back to the floor (y = 0) and they
+    # stay where they were carried horizontally.
+    call({"op": "add", "path": "/space/offset/y", "value": 0,
+          "stack": STACK, "gravity": True})
+    time.sleep(1)
 
-    # Done: drop the stack (closing the connection would do the same).
-    call({"op": "reset", "path": "/space/offset", "stack": STACK})
+    # Keep the connection open as long as the user should stay displaced:
+    # closing it removes the non-persistent stack (the user snaps back).
 ```
 
-To watch everything that's applied, subscribe to `/space/total`. To watch which tools are active, subscribe to `/space/stacks`, whose value is `{"max":32,"stacks":[{"id","persist","offset":{x,y,z,rotation}}]}`.
+To watch everything that's applied, subscribe to `/space/total`. To watch which tools are active, subscribe to `/space/stacks`, whose value is `{"max":32,"stacks":[{"id","persist","gravity","floor","offset":{x,y,z,rotation}}]}`.
 
 ## Semantics
 
+- **Sign convention:** offsets move the **world** relative to the user, exactly like the OVRAS Offsets tab. `+x` moves the user toward `-x`, and so on. In particular, **a negative `y` lifts the user up**.
 - **Units:** meters for `x/y/z`, degrees for `rotation`. Rotation is stored internally in 0.01° steps. Writes are limited to ±10 000 m and ±1 000 000°.
 - **Rotation pivot:** like the UI, changing `rotation` turns the playspace **around the headset**, which also shifts `x`/`z`. The exception is when *Universe-Centered Rotation* is enabled in Settings. In a combined `set`, rotation is applied first, so the `x`/`z` values you send are what you end up with.
 - **Axis locks:** the X/Y/Z axis locks set in OVRAS also block IPC writes to the locked axis of the *user* offset (not to stacks). The reply shows the actual resulting offset.

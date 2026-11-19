@@ -45,6 +45,10 @@ struct OffsetStack
     int rotation = 0; // centidegrees
     // false: removed when the owner (e.g. an IPC connection) goes away.
     bool persist = false;
+    // Gravity pulls y toward `floor` (offset space: +y lowers the user).
+    bool gravity = false;
+    float floor = 0.0f;
+    double velocityY = 0.0; // m/s, +y = falling
     // Opaque id of the last writer; 0 = none (UI).
     quintptr owner = 0;
 };
@@ -252,6 +256,8 @@ private:
     void clampVelocity( double* velocity );
 
     QMap<QString, OffsetStack> m_offsetStacks;
+    std::chrono::steady_clock::time_point m_lastStackGravityTimePoint;
+    void updateStackGravity();
     unsigned m_safetyResetCount = 0;
     bool m_keepStacksOnReset = false;
     void applyChaperoneResetData();
@@ -327,6 +333,9 @@ public:
     void setOffsetStackRotation( const QString& id,
                                  int centidegrees,
                                  bool pivotHmd );
+    // Converts a vector given relative to the HMD's heading (x right, y up,
+    // z backwards; yaw only) into the offset base frame, in place.
+    void hmdFrameToBase( double v[3] ) const;
     // Sets the user rotation; pivotHmd=false turns around the origin.
     void setRotationWithPivot( int centidegrees, bool pivotHmd );
     bool removeOffsetStack( const QString& id );

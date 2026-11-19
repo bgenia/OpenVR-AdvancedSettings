@@ -65,36 +65,41 @@ MyStackViewPage {
 
         // Column headers
         RowLayout {
-            spacing: 18
+            spacing: 12
             visible: stacks.length > 0
-            MyText { text: "Stack"; Layout.preferredWidth: 300; font.bold: true }
-            MyText { text: "X"; Layout.preferredWidth: 110; font.bold: true; horizontalAlignment: Text.AlignRight }
-            MyText { text: "Y"; Layout.preferredWidth: 110; font.bold: true; horizontalAlignment: Text.AlignRight }
-            MyText { text: "Z"; Layout.preferredWidth: 110; font.bold: true; horizontalAlignment: Text.AlignRight }
-            MyText { text: "Rot"; Layout.preferredWidth: 110; font.bold: true; horizontalAlignment: Text.AlignRight }
-            MyText { text: "Lifetime"; Layout.preferredWidth: 170; font.bold: true }
+            MyText { text: "Stack"; Layout.preferredWidth: 220; font.bold: true }
+            MyText { text: "X"; Layout.preferredWidth: 100; font.bold: true; horizontalAlignment: Text.AlignRight }
+            MyText { text: "Y"; Layout.preferredWidth: 100; font.bold: true; horizontalAlignment: Text.AlignRight }
+            MyText { text: "Z"; Layout.preferredWidth: 100; font.bold: true; horizontalAlignment: Text.AlignRight }
+            MyText { text: "Rot"; Layout.preferredWidth: 100; font.bold: true; horizontalAlignment: Text.AlignRight }
+            MyText { text: "Lifetime"; Layout.preferredWidth: 150; font.bold: true }
+            MyText { text: "Gravity"; Layout.preferredWidth: 140; font.bold: true }
         }
 
         Repeater {
             model: offsetStacksPage.stacks
             delegate: RowLayout {
-                spacing: 18
+                spacing: 12
                 MyText {
                     text: modelData.id
-                    Layout.preferredWidth: 300
+                    Layout.preferredWidth: 220
                     elide: Text.ElideRight
                 }
-                MyText { text: fmt(modelData.x, 2); Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
-                MyText { text: fmt(modelData.y, 2); Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
-                MyText { text: fmt(modelData.z, 2); Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
-                MyText { text: fmt(modelData.rotation, 1) + "°"; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
+                MyText { text: fmt(modelData.x, 2); Layout.preferredWidth: 100; horizontalAlignment: Text.AlignRight }
+                MyText { text: fmt(modelData.y, 2); Layout.preferredWidth: 100; horizontalAlignment: Text.AlignRight }
+                MyText { text: fmt(modelData.z, 2); Layout.preferredWidth: 100; horizontalAlignment: Text.AlignRight }
+                MyText { text: fmt(modelData.rotation, 1) + "°"; Layout.preferredWidth: 100; horizontalAlignment: Text.AlignRight }
                 MyText {
                     text: modelData.persist ? "Persistent" : "Connection"
-                    Layout.preferredWidth: 170
+                    Layout.preferredWidth: 150
+                }
+                MyText {
+                    text: !modelData.gravity ? "Off" : (modelData.falling ? "Falling" : "On")
+                    Layout.preferredWidth: 140
                 }
                 MyPushButton {
                     text: "Reset"
-                    Layout.preferredWidth: 150
+                    Layout.preferredWidth: 130
                     onClicked: {
                         MoveCenterTabController.resetOffsetStack(modelData.id)
                         offsetStacksPage.refresh()

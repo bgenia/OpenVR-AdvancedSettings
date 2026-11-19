@@ -222,6 +222,86 @@ void MoveCenterTabController::setOffsetStackRotation( const QString& id,
     it->rotation = centidegrees;
 }
 
+void MoveCenterTabController::hmdFrameToBase( double v[3] ) const
+{
+    vr::TrackedDevicePose_t poses[vr::k_unMaxTrackedDeviceCount];
+    vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(
+        m_trackingUniverse == vr::TrackingUniverseSeated
+            ? vr::TrackingUniverseSeated
+            : vr::TrackingUniverseStanding,
+        0.0f,
+        poses,
+        vr::k_unMaxTrackedDeviceCount );
+    const auto& m = poses[0].mDeviceToAbsoluteTracking.m;
+
+    // HMD right (+x) and backwards (+z) axes, flattened to the horizontal
+    // plane, in tracking space.
+    double right[3] = { static_cast<double>( m[0][0] ),
+                        0.0,
+                        static_cast<double>( m[2][0] ) };
+    double back[3] = { static_cast<double>( m[0][2] ),
+                       0.0,
+                       static_cast<double>( m[2][2] ) };
+    double rightLen = std::sqrt( right[0] * right[0] + right[2] * right[2] );
+    double backLen = std::sqrt( back[0] * back[0] + back[2] * back[2] );
+    if ( !poses[0].bPoseIsValid || rightLen < 1e-6 || backLen < 1e-6 )
+    {
+        // No usable heading: treat the HMD frame as the tracking frame.
+        right[0] = 1.0;
+        right[2] = 0.0;
+        back[0] = 0.0;
+        back[2] = 1.0;
+        rightLen = backLen = 1.0;
+    }
+
+    double tracking[3]
+        = { ( v[0] * right[0] / rightLen ) + ( v[2] * back[0] / backLen ),
+            v[1],
+            ( v[0] * right[2] / rightLen ) + ( v[2] * back[2] / backLen ) };
+
+    // Tracking space is rotated by the applied (total) rotation; convert to
+    // the un-rotated base frame the same way Space Drag does.
+    rotateCoordinates( tracking, -totalRotation() * k_centidegreesToRadians );
+    v[0] = tracking[0];
+    v[1] = tracking[1];
+    v[2] = tracking[2];
+}
+
+void MoveCenterTabController::updateStackGravity()
+{
+    const auto now = std::chrono::steady_clock::now();
+    // Clamp the step so a stall (e.g. a blocked event loop) doesn't teleport.
+    const double dt = std::clamp(
+        std::chrono::duration<double>( now - m_lastStackGravityTimePoint )
+            .count(),
+        0.0,
+        0.1 );
+    m_lastStackGravityTimePoint = now;
+
+    const double gravity = static_cast<double>( gravityStrength() );
+    for ( auto& stack : m_offsetStacks )
+    {
+        if ( !stack.gravity || stack.y >= stack.floor )
+        {
+            stack.velocityY = 0.0;
+            continue;
+        }
+        stack.velocityY = std::min( stack.velocityY + gravity * dt,
+                                    k_terminalVelocity_mps );
+        const auto next = static_cast<float>(
+            static_cast<double>( stack.y ) + stack.velocityY * dt );
+        if ( next >= stack.floor )
+        {
+            stack.y = stack.floor;
+            stack.velocityY = 0.0;
+        }
+        else
+        {
+            stack.y = next;
+        }
+    }
+}
+
 void MoveCenterTabController::setRotationWithPivot( int centidegrees,
                                                     bool pivotHmd )
 {
@@ -301,6 +381,9 @@ QVariantList MoveCenterTabController::offsetStackList() const
             { "z", static_cast<double>( it->z ) },
             { "rotation", it->rotation / 100.0 },
             { "persist", it->persist },
+            { "gravity", it->gravity },
+            { "floor", static_cast<double>( it->floor ) },
+            { "falling", it->gravity && it->y < it->floor },
         } );
     }
     return list;
@@ -3116,6 +3199,9 @@ void MoveCenterTabController::eventLoopTick(
         // dash is open this frame
         m_dashWasOpenPreviousFrame = true;
     }
+    // Offset stack gravity runs regardless of the dashboard: a dropped user
+    // must not hang in the air because they opened the menu.
+    updateStackGravity();
     updateSpace();
 }
 

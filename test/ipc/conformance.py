@@ -124,7 +124,9 @@ def run(url: str) -> None:
         reply = client.request({"id": 1, "op": "hello"})
         check("hello conforms", conforms("hello", reply))
         check("hello echoes id", reply.get("id") == 1)
-        check("hello advertises stacks", "stacks" in reply["value"].get("features", []))
+        features = reply["value"].get("features", [])
+        check("hello advertises stacks, stackGravity, hmdFrame",
+              {"stacks", "stackGravity", "hmdFrame"} <= set(features), str(features))
 
         reply = client.request({"id": 2, "op": "get", "path": "/space/offset"})
         check("get offset conforms", conforms("offset", reply))
@@ -331,6 +333,8 @@ def run_stacks(url: str) -> None:
         check("33rd stack: stack_limit", reply.get("error", {}).get("code") == "stack_limit", str(reply))
         reply = client.request({"op": "set", "path": "/space/offset/x", "value": 0.03, "stack": created[0] if created else persistent})
         check("existing stack still writable at limit", reply.get("ok") is True, str(reply))
+        for name in created:
+            client.request({"op": "reset", "path": "/space/offset", "stack": name})
 
         print("stacks: errors")
         error_cases = [
@@ -344,13 +348,75 @@ def run_stacks(url: str) -> None:
             ("reset field path", {"id": 47, "op": "reset", "path": "/space/offset/x"}, "bad_path"),
             ("stack on subscribe", {"id": 48, "op": "subscribe", "path": "/space/offset", "stack": PREFIX + "a"}, "bad_value"),
             ("stack on total get", {"id": 49, "op": "get", "path": "/space/total", "stack": PREFIX + "a"}, "bad_value"),
+            ("gravity without stack", {"id": 50, "op": "add", "path": "/space/offset/y", "value": 0, "gravity": True}, "bad_value"),
+            ("floor without stack", {"id": 51, "op": "add", "path": "/space/offset/y", "value": 0, "floor": 0}, "bad_value"),
+            ("gravity not bool", {"id": 52, "op": "add", "path": "/space/offset/y", "value": 0, "stack": PREFIX + "a", "gravity": 1}, "bad_value"),
+            ("floor out of range", {"id": 53, "op": "add", "path": "/space/offset/y", "value": 0, "stack": PREFIX + "a", "floor": 1e9}, "bad_value"),
+            ("bad frame", {"id": 54, "op": "add", "path": "/space/offset/x", "value": 0, "stack": PREFIX + "a", "frame": "hand"}, "bad_value"),
         ]
         for name, payload, code in error_cases:
             check(f"{name}: request is invalid per schema", not SCHEMAS["request"].is_valid(payload))
             reply = client.request(payload)
             check(f"{name}: conforms", conforms("error", reply))
             check(f"{name}: code {code}", reply.get("error", {}).get("code") == code, str(reply))
+        reply = client.request({"id": 55, "op": "set", "path": "/space/offset/x", "value": 0, "stack": PREFIX + "a", "frame": "hmd"})
+        check("frame on set: bad_value", conforms("error", reply) and reply["error"]["code"] == "bad_value", str(reply))
         check("failed writes created no stack", PREFIX + "a" not in stack_ids(client))
+
+        print("stacks: gravity")
+        gid = PREFIX + "gravity"
+        reply = client.request({"op": "set", "path": "/space/offset", "value": {"x": 0.3, "y": -1.0, "z": 0.2}, "stack": gid})
+        entry = next(s for s in client.request({"op": "get", "path": "/space/stacks"})["value"]["stacks"] if s["id"] == gid)
+        check("new stack: gravity off, floor 0", entry["gravity"] is False and entry["floor"] == 0, str(entry))
+        time.sleep(0.3)
+        held = client.request({"op": "get", "path": "/space/offset", "stack": gid})["value"]
+        check("no gravity: stack stays lifted", close(held["y"], -1.0), str(held))
+
+        client.request({"op": "add", "path": "/space/offset/y", "value": 0, "stack": gid, "gravity": True})
+        time.sleep(0.15)
+        mid = client.request({"op": "get", "path": "/space/offset", "stack": gid})["value"]
+        check("gravity: falling (y rising toward floor)", -1.0 < mid["y"] < 0, str(mid))
+        time.sleep(0.6)  # 1 m at 9.8 m/s^2 takes ~0.45 s
+        landed = client.request({"op": "get", "path": "/space/offset", "stack": gid})["value"]
+        check("gravity: landed exactly on floor 0", landed["y"] == 0, str(landed))
+        check("gravity: x/z unchanged", close(landed["x"], 0.3) and close(landed["z"], 0.2), str(landed))
+        entry = next(s for s in client.request({"op": "get", "path": "/space/stacks"})["value"]["stacks"] if s["id"] == gid)
+        check("stack list shows gravity on", entry["gravity"] is True, str(entry))
+
+        client.request({"op": "set", "path": "/space/offset/y", "value": -0.5, "stack": gid, "floor": -0.2})
+        time.sleep(0.6)
+        landed = client.request({"op": "get", "path": "/space/offset", "stack": gid})["value"]
+        check("custom floor -0.2: lands on it", close(landed["y"], -0.2), str(landed))
+
+        client.request({"op": "set", "path": "/space/offset/y", "value": 0.4, "stack": gid})
+        time.sleep(0.2)
+        below = client.request({"op": "get", "path": "/space/offset", "stack": gid})["value"]
+        check("below floor: gravity never raises the user", close(below["y"], 0.4), str(below))
+
+        client.request({"op": "set", "path": "/space/offset/y", "value": -1.0, "stack": gid, "gravity": False})
+        time.sleep(0.3)
+        held = client.request({"op": "get", "path": "/space/offset", "stack": gid})["value"]
+        check("gravity off again: holds", close(held["y"], -1.0), str(held))
+
+        user_y = client.request({"op": "get", "path": "/space/offset/y"})["value"]
+        other = PREFIX + "nogravity"
+        client.request({"op": "set", "path": "/space/offset/y", "value": -0.7, "stack": other})
+        client.request({"op": "add", "path": "/space/offset/y", "value": 0, "stack": gid, "gravity": True})
+        time.sleep(0.8)
+        other_y = client.request({"op": "get", "path": "/space/offset/y", "stack": other})["value"]
+        check("gravity only affects stacks that enable it", close(other_y, -0.7), str(other_y))
+        check("gravity doesn't touch the user offset",
+              close(client.request({"op": "get", "path": "/space/offset/y"})["value"], user_y))
+
+        print("stacks: hmd frame")
+        fid = PREFIX + "frame"
+        reply = client.request({"op": "add", "path": "/space/offset", "value": {"x": 0.3, "y": -0.1, "z": 0.4}, "stack": fid, "frame": "hmd"})
+        v = reply["value"]
+        check("hmd frame: add conforms", conforms("offset", reply))
+        check("hmd frame: length preserved", close((v["x"] ** 2 + v["z"] ** 2) ** 0.5, 0.5), str(v))
+        check("hmd frame: y unchanged by heading", close(v["y"], -0.1), str(v))
+        reply = client.request({"op": "add", "path": "/space/offset/x", "value": 0.0, "stack": fid, "frame": "base"})
+        check("frame base accepted", reply.get("ok") is True, str(reply))
     finally:
         for name in stack_ids(client):
             if name.startswith(PREFIX):

@@ -208,6 +208,8 @@ QJsonObject IpcProtocol::stackList() const
         stacks.append( QJsonObject{
             { "id", it.key() },
             { "persist", it->persist },
+            { "gravity", it->gravity },
+            { "floor", roundForWire( static_cast<double>( it->floor ) ) },
             { "offset", offsetJson( it->x, it->y, it->z, it->rotation ) },
         } );
     }
@@ -311,7 +313,8 @@ IpcProtocol::Result IpcProtocol::handleRequest( const QJsonObject& request,
                        { "name", "OVRAS" },
                        { "protocol", k_protocolVersion },
                        { "version", m_appVersion },
-                       { "features", QJsonArray{ "stacks" } },
+                       { "features",
+                         QJsonArray{ "stacks", "stackGravity", "hmdFrame" } },
                    } );
     }
 
@@ -350,7 +353,8 @@ IpcProtocol::Result IpcProtocol::handleRequest( const QJsonObject& request,
     QStringList allowedKeys{ "id", "op", "path" };
     if ( isWrite )
     {
-        allowedKeys << "value" << "stack" << "persist" << "pivot";
+        allowedKeys << "value" << "stack" << "persist" << "gravity" << "floor"
+                    << "pivot" << "frame";
     }
     else if ( ( op == "get" && isOffsetPath ) || op == "reset" )
     {
@@ -441,17 +445,51 @@ QJsonObject IpcProtocol::handleWrite( const QJsonValue& id,
     const auto value = request.value( "value" );
 
     // Validate everything first so a bad request changes nothing.
-    if ( request.contains( "persist" ) )
+    for ( const auto& flag : { QString( "persist" ), QString( "gravity" ) } )
     {
-        if ( !request.value( "persist" ).isBool() )
+        if ( !request.contains( flag ) )
         {
-            return errorReply( id, "bad_value", "persist must be a boolean" );
+            continue;
+        }
+        if ( !request.value( flag ).isBool() )
+        {
+            return errorReply( id, "bad_value", flag + " must be a boolean" );
         }
         if ( stackId.isEmpty() )
         {
             return errorReply(
-                id, "bad_value", "persist is only allowed with stack" );
+                id, "bad_value", flag + " is only allowed with stack" );
         }
+    }
+    if ( request.contains( "floor" ) )
+    {
+        if ( stackId.isEmpty() )
+        {
+            return errorReply(
+                id, "bad_value", "floor is only allowed with stack" );
+        }
+        const auto problem = validateNumber( "floor", request.value( "floor" ) );
+        if ( !problem.isEmpty() )
+        {
+            return errorReply( id, "bad_value", problem );
+        }
+    }
+
+    bool hmdFrame = false;
+    if ( request.contains( "frame" ) )
+    {
+        const auto frame = request.value( "frame" ).toString();
+        if ( frame != "base" && frame != "hmd" )
+        {
+            return errorReply(
+                id, "bad_value", "frame must be \"base\" or \"hmd\"" );
+        }
+        if ( !relative )
+        {
+            return errorReply(
+                id, "bad_value", "frame is only allowed with add" );
+        }
+        hmdFrame = frame == "hmd";
     }
 
     bool pivotHmd = !m_moveCenter.universeCenteredRotation();
@@ -516,6 +554,31 @@ QJsonObject IpcProtocol::handleWrite( const QJsonValue& id,
         updates.append( { field, value.toDouble() } );
     }
 
+    if ( hmdFrame )
+    {
+        // Rotate the translation part from the headset's heading into the
+        // base frame; rotation (if any) is unaffected and stays first.
+        double v[3] = { 0.0, 0.0, 0.0 };
+        QList<QPair<QString, double>> rotationOnly;
+        for ( const auto& update : updates )
+        {
+            if ( update.first == "rotation" )
+            {
+                rotationOnly.append( update );
+            }
+            else
+            {
+                v[update.first == "x" ? 0 : update.first == "y" ? 1 : 2]
+                    = update.second;
+            }
+        }
+        m_moveCenter.hmdFrameToBase( v );
+        updates = rotationOnly;
+        updates.append( { "x", v[0] } );
+        updates.append( { "y", v[1] } );
+        updates.append( { "z", v[2] } );
+    }
+
     // ---- user offset ----
     if ( stackId.isEmpty() )
     {
@@ -564,6 +627,16 @@ QJsonObject IpcProtocol::handleWrite( const QJsonValue& id,
     {
         stack->persist = request.value( "persist" ).toBool();
     }
+    if ( request.contains( "gravity" ) )
+    {
+        stack->gravity = request.value( "gravity" ).toBool();
+    }
+    if ( request.contains( "floor" ) )
+    {
+        stack->floor = static_cast<float>( request.value( "floor" ).toDouble() );
+    }
+    // Any write starts a new fall from rest.
+    stack->velocityY = 0.0;
     for ( const auto& update : updates )
     {
         if ( update.first == "rotation" )

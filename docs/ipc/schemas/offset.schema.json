@@ -29,7 +29,7 @@
     },
     "offset": {
       "type": "object",
-      "description": "A full offset: translation in the playspace's un-rotated base frame plus yaw.",
+      "description": "A full offset: translation in the playspace's un-rotated base frame plus yaw. Offsets move the WORLD relative to the user (as in the OVRAS Offsets tab): +x moves the user toward -x, and in particular a NEGATIVE y lifts the user up.",
       "properties": {
         "x": { "$ref": "#/definitions/meters" },
         "y": { "$ref": "#/definitions/meters" },
@@ -61,6 +61,11 @@
       "enum": ["hmd", "origin"],
       "description": "What a rotation write turns around. hmd: the headset stays in place (default, unless Universe-Centered Rotation is enabled in OVRAS, which makes origin the default). origin: the playspace origin; x/z are not adjusted."
     },
+    "frame": {
+      "type": "string",
+      "enum": ["base", "hmd"],
+      "description": "Frame of an `add`'s x/y/z values. base (default): the playspace base frame, like all offsets. hmd: relative to the headset's current heading (yaw only): x = headset right, y = up, z = headset backwards; converted to base by OVRAS. Same sign convention as offsets (the values move the world)."
+    },
     "stackEntry": {
       "type": "object",
       "properties": {
@@ -69,9 +74,17 @@
           "type": "boolean",
           "description": "false: removed when the connection that last wrote it closes. true: kept until reset (or OVRAS restarts)."
         },
+        "gravity": {
+          "type": "boolean",
+          "description": "true: OVRAS pulls this stack's y toward its floor (see floor) at the OVRAS gravity strength."
+        },
+        "floor": {
+          "$ref": "#/definitions/meters",
+          "description": "Stack y at which gravity stops (default 0 = the height before the stack lifted the user). Gravity only increases y, i.e. only lowers the user."
+        },
         "offset": { "$ref": "#/definitions/offset" }
       },
-      "required": ["id", "persist", "offset"],
+      "required": ["id", "persist", "gravity", "floor", "offset"],
       "additionalProperties": false
     },
     "stackList": {
